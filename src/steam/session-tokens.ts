@@ -1,7 +1,7 @@
 import type { Bindings } from '../types'
 import type { SteamGuardAccount } from './account'
 import { decodeSteamJwt } from './tokens'
-import { deriveMobileAccessToken } from './token-refresh'
+import { refreshMobileAccessToken } from './token-refresh'
 import { saveAccountSecret } from '../db/accounts'
 
 export function hasUsableTokens(account: SteamGuardAccount): boolean {
@@ -21,12 +21,7 @@ export async function ensureMobileAccessToken(env: Bindings, accountId: string, 
       // fall through to refresh
     }
   }
-  const refreshed = await deriveMobileAccessToken(account.tokens.refresh_token)
-  account.tokens = {
-    access_token: refreshed,
-    refresh_token: account.tokens.refresh_token,
-  }
+  account.tokens = await refreshMobileAccessToken(account.tokens, account.steam_id)
   await saveAccountSecret(env, accountId, accountKey, account)
-  return refreshed
+  return account.tokens.access_token
 }
-

@@ -262,26 +262,34 @@ export function AccountsPanel({
   async function listConfirmations(account: Account) {
     setMessage(null);
     setLoginSessionsPanel(null);
-    const data = await api<{ confirmations: SteamConfirmation[] }>(
-      `/api/accounts/${account.id}/confirmations`,
-    );
-    setConfirmationsPanel({
-      accountId: account.id,
-      accountName: account.accountName,
-      confirmations: data.confirmations,
-    });
+    try {
+      const data = await api<{ confirmations: SteamConfirmation[] }>(
+        `/api/accounts/${account.id}/confirmations`,
+      );
+      setConfirmationsPanel({
+        accountId: account.id,
+        accountName: account.accountName,
+        confirmations: data.confirmations,
+      });
+    } catch (err) {
+      notifyError(err, "Failed to load confirmations");
+    }
   }
 
   async function listLoginSessions(account: Account) {
     setConfirmationsPanel(null);
-    const data = await api<{ sessions: LoginSession[] }>(
-      `/api/accounts/${account.id}/login-sessions`,
-    );
-    setLoginSessionsPanel({
-      accountId: account.id,
-      accountName: account.accountName,
-      sessions: data.sessions,
-    });
+    try {
+      const data = await api<{ sessions: LoginSession[] }>(
+        `/api/accounts/${account.id}/login-sessions`,
+      );
+      setLoginSessionsPanel({
+        accountId: account.id,
+        accountName: account.accountName,
+        sessions: data.sessions,
+      });
+    } catch (err) {
+      notifyError(err, "Failed to load login approvals");
+    }
   }
 
   function setAccountQr(accountId: string, value: string) {

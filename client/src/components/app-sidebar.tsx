@@ -3,6 +3,7 @@ import {
   FileKey2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
+  LogInIcon,
   LogOutIcon,
   ShieldIcon,
   SmartphoneIcon,
@@ -28,6 +29,7 @@ import {
 export type AppSection =
   | "overview"
   | "accounts"
+  | "login-status"
   | "steam"
   | "users"
   | "audit"
@@ -41,6 +43,7 @@ type SidebarUser = {
 const adminItems = [
   { id: "overview", title: "Overview", icon: LayoutDashboardIcon },
   { id: "accounts", title: "Accounts", icon: KeyRoundIcon },
+  { id: "login-status", title: "Login status", icon: LogInIcon },
   { id: "steam", title: "Steam setup", icon: SmartphoneIcon },
   { id: "users", title: "Users", icon: UserRoundCogIcon },
   { id: "audit", title: "Audit", icon: ActivityIcon },

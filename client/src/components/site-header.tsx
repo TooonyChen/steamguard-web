@@ -11,6 +11,10 @@ const titles: Record<AppSection, { title: string; description: string }> = {
     title: "Accounts",
     description: "Steam Guard codes, confirmations, and account access.",
   },
+  "login-status": {
+    title: "Login status",
+    description: "Steam mobile sessions for confirmations and login approvals.",
+  },
   steam: {
     title: "Steam setup",
     description: "Create or transfer an authenticator through a guided Steam flow.",

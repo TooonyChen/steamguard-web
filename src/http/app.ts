@@ -2,11 +2,12 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import type { Context } from 'hono'
 import { z } from 'zod'
+import { EAuthSessionGuardType } from '../generated/steam-protobuf'
 import type { AppEnv, UserRow } from '../types'
 import { audit } from '../audit/audit'
 import { createSession, revokeSession, authMiddleware, currentFreshUser } from '../auth/session'
 import { createUser, activeAdminCount, findUserById, findUserByUsername, listAccountsForUser, toAuthUser } from '../db/queries'
-import { createEncryptedAccount, decryptAccountSecret, grantAccountToUser, revokeAccountFromUser } from '../db/accounts'
+import { createEncryptedAccount, decryptAccountSecret, grantAccountToUser, revokeAccountFromUser, saveAccountSecret } from '../db/accounts'
 import { loadAccountKeyForUser } from '../vault/vault'
 import { hashPassword, nowIso, verifyPassword } from '../crypto/webcrypto'
 import { jsonError, badRequest, forbidden, notFound, conflict } from './errors'
@@ -16,7 +17,7 @@ import { publicAccount } from '../steam/account'
 import { generateSteamGuardCode, secondsRemaining } from '../steam/guard-code'
 import { getSteamServerTime } from '../steam/time'
 import { createEncryptedFlow, loadEncryptedFlow, updateEncryptedFlow } from '../flows/flow-store'
-import { beginCredentialLogin, pollCredentialTokens, submitCredentialGuardCode } from '../steam/login-flow'
+import { beginCredentialLogin, pollCredentialTokens, submitCredentialGuardCode, type CredentialFlowState } from '../steam/login-flow'
 import {
   addAuthenticatorForSetup,
   finalizeSetupAuthenticator,
@@ -32,6 +33,7 @@ import { approveLoginChallenge, getChallengeSessionInfo, listLoginSessions } fro
 import { parseSteamQrChallenge } from '../steam/qr-login'
 import { removeAuthenticator } from '../steam/twofactor-client'
 import { ensureMobileAccessToken } from '../steam/session-tokens'
+import { steamLoginStatus } from '../steam/login-status'
 import { SteamApiError } from '../steam/webapi-transport'
 import { EResult } from '../steam/eresult'
 
@@ -72,6 +74,11 @@ const importMaFileSchema = z.object({
 
 const credentialFlowSchema = z.object({
   accountName: z.string().min(1),
+  password: z.string().min(1),
+  deviceName: z.string().max(120).optional(),
+})
+
+const accountSteamLoginBeginSchema = z.object({
   password: z.string().min(1),
   deviceName: z.string().max(120).optional(),
 })
@@ -187,7 +194,44 @@ function translateLoginApprovalError(err: unknown): never {
       badRequest('This Steam QR challenge is no longer valid. Refresh the QR on the Steam login page and try again.')
     }
   }
+  translateSteamSessionError(err)
+}
+
+function translateSteamSessionError(err: unknown): never {
+  if (err instanceof SteamApiError) {
+    if (err.result === EResult.AccessDenied || err.result === EResult.NotLoggedOn) {
+      badRequest('Steam login session expired or invalid. Log in to Steam again to enable confirmations and login approvals.', 'steam_login_invalid')
+    }
+  }
+  if (err instanceof Error && err.message.includes('no stored refresh token')) {
+    badRequest('This account has no Steam login session. Log in to Steam once to enable confirmations and login approvals.', 'steam_login_required')
+  }
   throw err
+}
+
+type AccountSteamLoginFlowState = CredentialFlowState & {
+  accountId: string
+}
+
+function assertFlowAccount(flowAccountId: string | null, accountId: string): void {
+  if (flowAccountId !== accountId) forbidden('Flow belongs to a different Steam account')
+}
+
+async function submitStoredDeviceCodeIfAllowed(state: AccountSteamLoginFlowState, sharedSecret: string): Promise<{
+  state: AccountSteamLoginFlowState
+  autoSubmittedGuardCode: boolean
+}> {
+  const canUseStoredDeviceCode = state.allowedConfirmations.some(
+    (confirmation) => confirmation.confirmationType === EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode,
+  )
+  if (!canUseStoredDeviceCode) return { state, autoSubmittedGuardCode: false }
+  const time = await getSteamServerTime()
+  const code = await generateSteamGuardCode(sharedSecret, time.unixTime)
+  const next = await submitCredentialGuardCode(state, {
+    code,
+    confirmationType: EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode,
+  }) as AccountSteamLoginFlowState
+  return { state: next, autoSubmittedGuardCode: true }
 }
 
 async function parseMaFileImport(c: Context<AppEnv>): Promise<string | Record<string, unknown>> {
@@ -564,6 +608,128 @@ export function createApp() {
     return c.json(jsonOk({ deleted: true }))
   })
 
+  app.get('/api/accounts/:accountId/steam-login/status', authMiddleware, async (c) => {
+    const actor = c.get('user')
+    assertAdmin(actor)
+    const accountId = requiredParam(c, 'accountId')
+    const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
+    const account = await decryptAccountSecret(c.env, accountId, accountKey)
+    return c.json(jsonOk({ steamLogin: steamLoginStatus(account) }))
+  })
+
+  app.post('/api/accounts/:accountId/steam-login/check', authMiddleware, async (c) => {
+    const actor = c.get('user')
+    assertAdmin(actor)
+    const accountId = requiredParam(c, 'accountId')
+    const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
+    const account = await decryptAccountSecret(c.env, accountId, accountKey)
+    try {
+      await ensureMobileAccessToken(c.env, accountId, accountKey, account)
+      return c.json(jsonOk({ steamLogin: steamLoginStatus(account, { checked: true }) }))
+    } catch (err) {
+      if (err instanceof SteamApiError && (err.result === EResult.AccessDenied || err.result === EResult.NotLoggedOn)) {
+        return c.json(jsonOk({
+          steamLogin: steamLoginStatus(account, {
+            checked: true,
+            invalidMessage: 'Stored Steam login session was rejected by Steam.',
+          }),
+        }))
+      }
+      if (err instanceof Error && err.message.includes('no stored refresh token')) {
+        return c.json(jsonOk({ steamLogin: steamLoginStatus(account, { checked: true }) }))
+      }
+      throw err
+    }
+  })
+
+  app.post('/api/accounts/:accountId/steam-login/begin', authMiddleware, async (c) => {
+    const actor = c.get('user')
+    assertAdmin(actor)
+    const accountId = requiredParam(c, 'accountId')
+    const input = await parseJson(c, accountSteamLoginBeginSchema)
+    const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
+    const account = await decryptAccountSecret(c.env, accountId, accountKey)
+    if (!account.account_name) badRequest('This account has no Steam account name to log in with')
+    const credential = await beginCredentialLogin({
+      accountName: account.account_name,
+      password: input.password,
+      deviceName: input.deviceName,
+    })
+    const initialState: AccountSteamLoginFlowState = { ...credential, accountId }
+    const { state, autoSubmittedGuardCode } = await submitStoredDeviceCodeIfAllowed(initialState, account.shared_secret)
+    const flow = await createEncryptedFlow(c.env, {
+      kind: 'account_steam_login',
+      actor,
+      accountId,
+      state: state as unknown as Record<string, unknown>,
+    })
+    await audit(c.env, { actorUserId: actor.id, accountId, action: 'steam_login_started', outcome: 'success', targetType: 'auth_flow', targetId: flow.id })
+    return c.json(jsonOk({
+      flowId: flow.id,
+      step: state.step,
+      allowedConfirmations: state.allowedConfirmations,
+      interval: state.interval,
+      autoSubmittedGuardCode,
+    }), 201)
+  })
+
+  app.post('/api/accounts/:accountId/steam-login/:flowId/submit-code', authMiddleware, async (c) => {
+    const actor = c.get('user')
+    assertAdmin(actor)
+    const accountId = requiredParam(c, 'accountId')
+    const flowId = requiredParam(c, 'flowId')
+    const input = await parseJson(c, guardCodeSchema)
+    const { row, state } = await loadEncryptedFlow<AccountSteamLoginFlowState>(c.env, flowId, actor, 'account_steam_login')
+    assertFlowAccount(row.account_id, accountId)
+    const next = await submitCredentialGuardCode(state, input) as AccountSteamLoginFlowState
+    await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
+    return c.json(jsonOk({ flowId, step: next.step }))
+  })
+
+  app.post('/api/accounts/:accountId/steam-login/:flowId/poll', authMiddleware, async (c) => {
+    const actor = c.get('user')
+    assertAdmin(actor)
+    const accountId = requiredParam(c, 'accountId')
+    const flowId = requiredParam(c, 'flowId')
+    const { row, state } = await loadEncryptedFlow<AccountSteamLoginFlowState>(c.env, flowId, actor, 'account_steam_login')
+    assertFlowAccount(row.account_id, accountId)
+    const next = await pollCredentialTokens(state) as AccountSteamLoginFlowState
+    if (next.step !== 'tokens_ready') {
+      await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
+      return c.json(jsonOk({ flowId, step: next.step }))
+    }
+    if (!next.tokens?.access_token || !next.tokens.refresh_token) {
+      throw new Error('Steam auth completed without persisted tokens')
+    }
+    const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
+    const account = await decryptAccountSecret(c.env, accountId, accountKey)
+    const existingSteamId = String(account.steam_id || '')
+    const steamIdChanged = Boolean(existingSteamId && existingSteamId !== next.steamId)
+    account.steam_id = next.steamId
+    account.tokens = next.tokens
+    await saveAccountSecret(c.env, accountId, accountKey, account)
+    await c.env.DB
+      .prepare('UPDATE steam_accounts SET steam_id = ?, updated_at = ? WHERE id = ?')
+      .bind(next.steamId, nowIso(), accountId)
+      .run()
+    await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'completed')
+    await audit(c.env, {
+      actorUserId: actor.id,
+      accountId,
+      action: 'steam_login_completed',
+      outcome: 'success',
+      targetType: 'auth_flow',
+      targetId: flowId,
+      metadata: steamIdChanged ? { steamIdUpdated: true } : null,
+    })
+    return c.json(jsonOk({
+      flowId,
+      step: next.step,
+      steamLogin: steamLoginStatus(account, { checked: true }),
+      steamIdChanged,
+    }))
+  })
+
   app.post('/api/accounts/:accountId/authenticator/remove', authMiddleware, async (c) => {
     const actor = c.get('user')
     assertAdmin(actor)
@@ -738,7 +904,12 @@ export function createApp() {
     const accountId = requiredParam(c, 'accountId')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
-    const confirmations = await listConfirmations(c.env, accountId, accountKey, account)
+    let confirmations
+    try {
+      confirmations = await listConfirmations(c.env, accountId, accountKey, account)
+    } catch (err) {
+      translateSteamSessionError(err)
+    }
     await audit(c.env, { actorUserId: actor.id, accountId, action: 'confirmations_listed', outcome: 'success' })
     return c.json(jsonOk({ confirmations }))
   })
@@ -749,7 +920,12 @@ export function createApp() {
     const accountId = requiredParam(c, 'accountId')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
-    const html = await getConfirmationDetails(c.env, accountId, accountKey, account, requiredParam(c, 'confirmationId'))
+    let html
+    try {
+      html = await getConfirmationDetails(c.env, accountId, accountKey, account, requiredParam(c, 'confirmationId'))
+    } catch (err) {
+      translateSteamSessionError(err)
+    }
     await audit(c.env, { actorUserId: actor.id, accountId, action: 'confirmation_details_viewed', outcome: 'success' })
     return c.json(jsonOk({ html }))
   })
@@ -761,7 +937,11 @@ export function createApp() {
     const accountId = requiredParam(c, 'accountId')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
-    await actOnConfirmation(c.env, accountId, accountKey, account, 'allow', { id: requiredParam(c, 'confirmationId'), nonce: input.nonce })
+    try {
+      await actOnConfirmation(c.env, accountId, accountKey, account, 'allow', { id: requiredParam(c, 'confirmationId'), nonce: input.nonce })
+    } catch (err) {
+      translateSteamSessionError(err)
+    }
     await audit(c.env, { actorUserId: actor.id, accountId, action: 'confirmation_accepted', outcome: 'success' })
     return c.json(jsonOk({ accepted: true }))
   })
@@ -773,7 +953,11 @@ export function createApp() {
     const accountId = requiredParam(c, 'accountId')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
-    await actOnConfirmation(c.env, accountId, accountKey, account, 'cancel', { id: requiredParam(c, 'confirmationId'), nonce: input.nonce })
+    try {
+      await actOnConfirmation(c.env, accountId, accountKey, account, 'cancel', { id: requiredParam(c, 'confirmationId'), nonce: input.nonce })
+    } catch (err) {
+      translateSteamSessionError(err)
+    }
     await audit(c.env, { actorUserId: actor.id, accountId, action: 'confirmation_denied', outcome: 'success' })
     return c.json(jsonOk({ denied: true }))
   })
@@ -785,7 +969,11 @@ export function createApp() {
     const accountId = requiredParam(c, 'accountId')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
-    await actOnConfirmationsBulk(c.env, accountId, accountKey, account, input.action, input.confirmations)
+    try {
+      await actOnConfirmationsBulk(c.env, accountId, accountKey, account, input.action, input.confirmations)
+    } catch (err) {
+      translateSteamSessionError(err)
+    }
     await audit(c.env, { actorUserId: actor.id, accountId, action: input.action === 'allow' ? 'confirmations_bulk_accepted' : 'confirmations_bulk_denied', outcome: 'success', metadata: { count: input.confirmations.length } })
     return c.json(jsonOk({ completed: true, count: input.confirmations.length }))
   })
@@ -796,7 +984,12 @@ export function createApp() {
     await assertAccountAccess(c, accountId, 'code')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
-    const sessions = await listLoginSessions(c.env, accountId, accountKey, account)
+    let sessions
+    try {
+      sessions = await listLoginSessions(c.env, accountId, accountKey, account)
+    } catch (err) {
+      translateSteamSessionError(err)
+    }
     await audit(c.env, { actorUserId: actor.id, accountId, action: 'login_sessions_listed', outcome: 'success' })
     return c.json(jsonOk({ sessions }))
   })

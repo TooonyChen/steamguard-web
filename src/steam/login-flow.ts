@@ -12,7 +12,7 @@ import {
   updateAuthSessionWithSteamGuardCode,
 } from './authentication-client'
 import { decodeSteamJwt } from './tokens'
-import { deriveMobileAccessToken } from './token-refresh'
+import { refreshMobileAccessToken } from './token-refresh'
 import { longToString, steamLong } from './long'
 
 export type SteamTokens = {
@@ -114,10 +114,15 @@ export async function pollCredentialTokens(state: CredentialFlowState): Promise<
     return { ...state, step: 'poll_tokens' }
   }
 
-  const refreshToken = data.refreshToken || state.tokens?.refresh_token || ''
+  let refreshToken = data.refreshToken || state.tokens?.refresh_token || ''
   let accessToken = data.accessToken || ''
   if (!accessToken && refreshToken) {
-    accessToken = await deriveMobileAccessToken(refreshToken)
+    const refreshed = await refreshMobileAccessToken({
+      access_token: state.tokens?.access_token || '',
+      refresh_token: refreshToken,
+    }, state.steamId)
+    accessToken = refreshed.access_token
+    refreshToken = refreshed.refresh_token
   }
   if (!accessToken || !refreshToken) {
     throw new Error('Steam auth completed without usable mobile tokens')

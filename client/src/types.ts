@@ -18,6 +18,19 @@ export type Account = {
   updatedAt?: string
 }
 
+export type SteamLoginState = "active" | "refreshable" | "missing" | "invalid"
+
+export type SteamLoginStatus = {
+  state: SteamLoginState
+  message: string
+  hasAccessToken: boolean
+  hasRefreshToken: boolean
+  accessTokenExpiresAt: string | null
+  refreshTokenExpiresAt: string | null
+  autoRefreshAvailable: boolean
+  checkedAt: string | null
+}
+
 export type FlowMode = "setup" | "transfer"
 export type FlowPhase = "start" | "guard" | "poll" | "activation" | "sms" | "done"
 

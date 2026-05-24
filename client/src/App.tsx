@@ -6,6 +6,7 @@ import { AdminUsersPanel } from "@/components/admin-users-panel"
 import { AppSidebar, type AppSection } from "@/components/app-sidebar"
 import { AuditPanel } from "@/components/audit-panel"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { LoginStatusPanel } from "@/components/login-status-panel"
 import { LoginView } from "@/components/login-view"
 import { OverviewPanel } from "@/components/overview-panel"
 import { SettingsPanel } from "@/components/settings-panel"
@@ -91,6 +92,9 @@ export function App() {
               {activeSection === "overview" ? <OverviewPanel user={user} accounts={accounts} /> : null}
               {activeSection === "accounts" ? (
                 <AccountsPanel accounts={accounts} role={user.role} onRefresh={refreshAccounts} />
+              ) : null}
+              {activeSection === "login-status" && user.role === "admin" ? (
+                <LoginStatusPanel accounts={accounts} onRefresh={refreshAccounts} />
               ) : null}
               {activeSection === "steam" && user.role === "admin" ? (
                 <SteamFlowsPanel onComplete={refreshAccounts} />

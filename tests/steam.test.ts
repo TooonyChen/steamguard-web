@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import protobuf from 'protobufjs/minimal.js'
 import {
   CAuthentication_BeginAuthSessionViaCredentials_Request_BinaryGuardData,
+  CAuthentication_AccessToken_GenerateForApp_Response,
   CAuthentication_GetPasswordRSAPublicKey_Response,
   EAuthTokenPlatformType,
   ESessionPersistence,
@@ -18,6 +19,7 @@ import { parseMaFile, serializeFullMaFile } from '../src/steam/mafile'
 import { encryptSteamPassword } from '../src/steam/crypto/rsa-password'
 import { eresultName } from '../src/steam/eresult'
 import { hasUsableTokens } from '../src/steam/session-tokens'
+import { refreshMobileAccessToken } from '../src/steam/token-refresh'
 import { accountBlobAad } from '../src/db/accounts'
 import type { SteamGuardAccount } from '../src/steam/account'
 import type { Bindings } from '../src/types'
@@ -117,6 +119,43 @@ describe('Steam helper contracts', () => {
     }))).toBe(false)
     expect(hasUsableTokens(accountWithTokens(null))).toBe(false)
     expect(hasUsableTokens(accountWithTokens(undefined))).toBe(false)
+  })
+
+  it('refreshes mobile access tokens with the stored access token as request auth', async () => {
+    const responseBody = CAuthentication_AccessToken_GenerateForApp_Response.encode(
+      CAuthentication_AccessToken_GenerateForApp_Response.create({
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+      }),
+    ).finish()
+    const responseBuffer = new ArrayBuffer(responseBody.byteLength)
+    new Uint8Array(responseBuffer).set(responseBody)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      expect(url.pathname).toBe('/IAuthenticationService/GenerateAccessTokenForApp/v1')
+      expect(url.searchParams.get('access_token')).toBe('old-access')
+      expect(url.searchParams.get('access_token')).not.toBe(sampleSteamJwt)
+      expect(init?.method).toBe('POST')
+      expect(init?.body).toBeInstanceOf(FormData)
+      expect((init?.body as FormData).get('input_protobuf_encoded')).toEqual(expect.any(String))
+      return new Response(responseBuffer, {
+        status: 200,
+        headers: { 'x-eresult': '1' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await expect(refreshMobileAccessToken({
+        access_token: 'old-access',
+        refresh_token: sampleSteamJwt,
+      }, '76561199155706892')).resolves.toEqual({
+        access_token: 'new-access',
+        refresh_token: 'new-refresh',
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('builds stable account blob associated data', () => {
