@@ -22,6 +22,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
+  useSidebar,
 } from "@/components/ui/sidebar"
 
 export type AppSection =
@@ -67,6 +68,17 @@ export function AppSidebar({
   onLogout: () => void
 }) {
   const items = user.role === "admin" ? adminItems : viewerItems
+  const { isMobile, setOpenMobile } = useSidebar()
+
+  function handleNavigate(section: AppSection) {
+    onNavigate(section)
+    if (isMobile) setOpenMobile(false)
+  }
+
+  function handleLogout() {
+    if (isMobile) setOpenMobile(false)
+    onLogout()
+  }
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -98,7 +110,7 @@ export function AppSidebar({
                     type="button"
                     isActive={activeSection === item.id}
                     tooltip={item.title}
-                    onClick={() => onNavigate(item.id)}
+                    onClick={() => handleNavigate(item.id)}
                   >
                     <item.icon />
                     <span>{item.title}</span>
@@ -128,7 +140,7 @@ export function AppSidebar({
           </div>
           <button
             type="button"
-            onClick={onLogout}
+            onClick={handleLogout}
             className="mt-3 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border bg-background text-sm hover:bg-muted"
           >
             <LogOutIcon className="size-4" />

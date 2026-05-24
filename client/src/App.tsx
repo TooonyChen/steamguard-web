@@ -5,6 +5,7 @@ import { AccountsPanel } from "@/components/accounts-panel"
 import { AdminUsersPanel } from "@/components/admin-users-panel"
 import { AppSidebar, type AppSection } from "@/components/app-sidebar"
 import { AuditPanel } from "@/components/audit-panel"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { LoginView } from "@/components/login-view"
 import { OverviewPanel } from "@/components/overview-panel"
 import { SettingsPanel } from "@/components/settings-panel"
@@ -65,6 +66,7 @@ export function App() {
   if (!user) return <LoginView onLogin={refreshAll} />
 
   return (
+    <ErrorBoundary>
     <TooltipProvider>
       <SidebarProvider
         style={
@@ -107,5 +109,6 @@ export function App() {
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>
+    </ErrorBoundary>
   )
 }

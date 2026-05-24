@@ -4,7 +4,7 @@ import { api } from "@/api"
 import { LoginForm } from "@/components/login-form"
 
 export function LoginView({ onLogin }: { onLogin: () => Promise<void> }) {
-  const [username, setUsername] = useState("admin")
+  const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)

@@ -21,6 +21,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "hono": "^4.12.21",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.16.0",
     "node-forge": "^1.4.0",
     "protobufjs": "^8.4.2",

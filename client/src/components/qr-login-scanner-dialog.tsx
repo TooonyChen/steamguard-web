@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import jsQR from "jsqr";
 import { CameraIcon, QrCodeIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -13,21 +14,7 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 
-type BarcodeDetectorResult = {
-  rawValue?: string;
-};
-
-type BarcodeDetectorLike = {
-  detect(source: HTMLVideoElement): Promise<BarcodeDetectorResult[]>;
-};
-
-type BarcodeDetectorConstructor = new (options?: {
-  formats?: string[];
-}) => BarcodeDetectorLike;
-
-type WindowWithBarcodeDetector = Window & {
-  BarcodeDetector?: BarcodeDetectorConstructor;
-};
+const SCAN_INTERVAL_MS = 150;
 
 function isSteamQrChallenge(value: string): boolean {
   try {
@@ -66,21 +53,12 @@ export function QrLoginScannerDialog({
     if (!open) return;
 
     let cancelled = false;
-    let frame = 0;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     async function startScanner() {
       setManualUrl("");
       setScanError(null);
       setScanning(true);
-
-      const Detector = (window as WindowWithBarcodeDetector).BarcodeDetector;
-      if (!Detector) {
-        setScanning(false);
-        setScanError(
-          "This browser cannot scan QR codes directly. Paste the Steam QR URL instead.",
-        );
-        return;
-      }
 
       if (!navigator.mediaDevices?.getUserMedia) {
         setScanning(false);
@@ -90,55 +68,104 @@ export function QrLoginScannerDialog({
         return;
       }
 
+      let stream: MediaStream;
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: "environment" } },
           audio: false,
         });
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
+      } catch (err) {
+        if (cancelled) return;
+        setScanning(false);
+        if (
+          err instanceof DOMException &&
+          (err.name === "NotAllowedError" || err.name === "SecurityError")
+        ) {
+          setScanError(
+            "Camera permission denied. Allow camera access in your browser settings, or paste the QR URL below.",
+          );
+        } else if (err instanceof DOMException && err.name === "NotFoundError") {
+          setScanError(
+            "No camera found on this device. Paste the QR URL below instead.",
+          );
+        } else {
+          setScanError(err instanceof Error ? err.message : "Camera unavailable.");
+        }
+        return;
+      }
+
+      if (cancelled) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      video.srcObject = stream;
+      try {
+        await video.play();
+      } catch (err) {
+        if (cancelled) return;
+        setScanning(false);
+        setScanError(
+          err instanceof Error ? err.message : "Unable to start camera preview.",
+        );
+        return;
+      }
+
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) {
+        setScanning(false);
+        setScanError("Canvas 2D is not available in this browser.");
+        return;
+      }
+
+      const tick = () => {
+        if (cancelled) return;
+        const v = videoRef.current;
+        if (!v || v.readyState < v.HAVE_ENOUGH_DATA || v.videoWidth === 0) {
+          timeoutId = setTimeout(tick, SCAN_INTERVAL_MS);
           return;
         }
-
-        streamRef.current = stream;
-        const video = videoRef.current;
-        if (!video) return;
-        video.srcObject = stream;
-        await video.play();
-
-        const detector = new Detector({ formats: ["qr_code"] });
-        const tick = async () => {
-          if (cancelled || !videoRef.current) return;
-          try {
-            const codes = await detector.detect(videoRef.current);
-            const rawValue = codes
-              .map((code) => code.rawValue || "")
-              .find(isSteamQrChallenge);
-            if (rawValue) {
-              onDetectedRef.current(rawValue);
-              onOpenChange(false);
-              return;
-            }
-          } catch {
-            // Keep scanning; transient decode failures are normal while the camera moves.
-          }
-          frame = requestAnimationFrame(tick);
-        };
-        frame = requestAnimationFrame(tick);
-      } catch (err) {
-        setScanError(
-          err instanceof Error ? err.message : "Camera permission was denied.",
+        canvas.width = v.videoWidth;
+        canvas.height = v.videoHeight;
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        let imageData: ImageData;
+        try {
+          imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        } catch {
+          // Some browsers throw before the first decoded frame is ready.
+          timeoutId = setTimeout(tick, SCAN_INTERVAL_MS);
+          return;
+        }
+        const code = jsQR(
+          imageData.data,
+          imageData.width,
+          imageData.height,
+          { inversionAttempts: "dontInvert" },
         );
-      } finally {
-        setScanning(false);
-      }
+        if (code?.data && isSteamQrChallenge(code.data)) {
+          onDetectedRef.current(code.data);
+          onOpenChange(false);
+          return;
+        }
+        timeoutId = setTimeout(tick, SCAN_INTERVAL_MS);
+      };
+
+      setScanning(false);
+      tick();
     }
 
     void startScanner();
 
     return () => {
       cancelled = true;
-      cancelAnimationFrame(frame);
+      if (timeoutId !== null) clearTimeout(timeoutId);
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
@@ -173,6 +200,7 @@ export function QrLoginScannerDialog({
             className="aspect-video w-full bg-background object-cover"
             muted
             playsInline
+            autoPlay
           />
         </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
