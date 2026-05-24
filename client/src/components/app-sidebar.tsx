@@ -49,7 +49,7 @@ const adminItems = [
 
 const viewerItems = [
   { id: "overview", title: "Overview", icon: LayoutDashboardIcon },
-  { id: "accounts", title: "Codes", icon: KeyRoundIcon },
+  { id: "accounts", title: "Accounts", icon: KeyRoundIcon },
   { id: "settings", title: "Settings", icon: ShieldIcon },
 ] satisfies Array<{ id: AppSection; title: string; icon: React.ComponentType<{ className?: string }> }>
 

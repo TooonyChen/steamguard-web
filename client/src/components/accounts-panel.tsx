@@ -445,7 +445,7 @@ export function AccountsPanel({
           <p className="text-sm text-muted-foreground">
             {role === "admin"
               ? "Manage imported authenticators."
-              : "View assigned Steam Guard codes."}
+              : "View assigned Steam Guard codes and handle login approvals."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -595,56 +595,52 @@ export function AccountsPanel({
                     Confirmations
                   </Button>
                 ) : null}
-                {role === "admin" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void listLoginSessions(account)}
+                >
+                  <ActivityIcon />
+                  Logins
+                </Button>
+              </div>
+              <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
+                <div>
+                  <p className="text-sm font-medium">QR login approval</p>
+                  <p className="text-xs text-muted-foreground">
+                    Scan or paste a Steam QR URL, then review before accepting
+                    or denying.
+                  </p>
+                </div>
+                <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                  <Input
+                    placeholder="https://s.team/q/..."
+                    value={qrChallenges[account.id] || ""}
+                    onChange={(event) =>
+                      setAccountQr(account.id, event.target.value)
+                    }
+                  />
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => void listLoginSessions(account)}
+                    disabled={!qrChallenges[account.id]?.trim()}
+                    onClick={() =>
+                      reviewQr(account, qrChallenges[account.id] || "")
+                    }
                   >
-                    <ActivityIcon />
-                    Logins
+                    <QrCodeIcon />
+                    Review
                   </Button>
-                ) : null}
-              </div>
-              {role === "admin" ? (
-                <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
-                  <div>
-                    <p className="text-sm font-medium">QR login approval</p>
-                    <p className="text-xs text-muted-foreground">
-                      Scan or paste a Steam QR URL, then review before accepting
-                      or denying.
-                    </p>
-                  </div>
-                  <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-                    <Input
-                      placeholder="https://s.team/q/..."
-                      value={qrChallenges[account.id] || ""}
-                      onChange={(event) =>
-                        setAccountQr(account.id, event.target.value)
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={!qrChallenges[account.id]?.trim()}
-                      onClick={() =>
-                        reviewQr(account, qrChallenges[account.id] || "")
-                      }
-                    >
-                      <QrCodeIcon />
-                      Review
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setScanAccount(account)}
-                    >
-                      <CameraIcon />
-                      Scan QR
-                    </Button>
-                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setScanAccount(account)}
+                  >
+                    <CameraIcon />
+                    Scan QR
+                  </Button>
                 </div>
-              ) : null}
+              </div>
             </CardContent>
           </Card>
         ))}

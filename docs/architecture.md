@@ -145,9 +145,9 @@ Account-level permissions:
 | Download Full `.maFile` plaintext backup | yes | no |
 | View confirmations | yes | no |
 | Accept/deny confirmations | yes | no |
-| View pending login sessions | yes | no |
-| Approve/deny login sessions | yes | no |
-| QR login approval | yes | no |
+| View pending login sessions | yes | assigned only |
+| Approve/deny login sessions | yes | assigned only |
+| QR login approval | yes | assigned only |
 
 Viewer account access must be explicitly authorized through `account_permissions`. Do not guess visibility solely from account name or Steam ID.
 
@@ -201,7 +201,7 @@ auth session valid
   -> if tokens changed, re-encrypt and save blob
 ```
 
-By default, admin accounts can manage Steam codes, Full export, confirmations, login approvals, and setup/transfer/remove. Viewers can only view the Steam Guard code/status of accounts assigned to them, and cannot export `.maFile`s or execute Steam operations.
+By default, admin accounts can manage Steam codes, Full export, confirmations, login approvals, and setup/transfer/remove. Viewers can view Steam Guard code/status and handle login approvals for accounts assigned to them, but cannot export `.maFile`s, manage confirmations, or manage authenticators.
 
 ## maFile Full Export
 
@@ -500,6 +500,7 @@ Viewer navigation should only show:
 - account list
 - code view
 - status view
+- login approvals and QR login approval
 - own password/username settings
 
 Admin navigation should include:

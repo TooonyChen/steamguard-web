@@ -6,7 +6,7 @@
 
 - 多用户 Web 应用，支持管理员和普通 viewer。
 - 管理员可以创建、删除、禁用 viewer，并管理 viewer 能访问的 Steam 账号。
-- viewer 默认只能查看被授权账号的 Steam Guard 验证码，不能确认交易、批准登录或管理 authenticator。
+- viewer 默认可以查看被授权账号的 Steam Guard 验证码，并处理这些账号的 login approval / QR login approval；不能确认交易或管理 authenticator。
 - 管理员可以导入 `.maFile`、下载单账号 Full `.maFile` 明文备份、创建/转移 authenticator、查看/处理 confirmations、批准/拒绝登录请求、删除账号。
 - 部署时自动生成初始 admin 账号和随机密码；后续可在前端修改用户名和密码。
 - 后端运行在 Cloudflare Workers，使用 Hono 作为 API 框架，D1 作为持久化数据库。
@@ -145,9 +145,9 @@ viewer
 | 下载 Full `.maFile` 明文备份 | yes | no |
 | 查看 confirmations | yes | no |
 | 接受/拒绝 confirmations | yes | no |
-| 查看 pending login sessions | yes | no |
-| 批准/拒绝 login sessions | yes | no |
-| QR login approval | yes | no |
+| 查看 pending login sessions | yes | assigned only |
+| 批准/拒绝 login sessions | yes | assigned only |
+| QR login approval | yes | assigned only |
 
 viewer 的账号访问必须通过 `account_permissions` 显式授权。不要仅按账号名或 Steam ID 猜测可见性。
 
@@ -201,7 +201,7 @@ auth session valid
   -> if tokens changed, re-encrypt and save blob
 ```
 
-admin 账号默认能管理 Steam codes、Full export、confirmations、login approvals、setup/transfer/remove。viewer 只能查看被分配账号的 Steam Guard code/status，不能导出 `.maFile` 或执行 Steam 操作。
+admin 账号默认能管理 Steam codes、Full export、confirmations、login approvals、setup/transfer/remove。viewer 可以查看被分配账号的 Steam Guard code/status，并处理这些账号的 login approvals；不能导出 `.maFile`、管理 confirmations 或管理 authenticator。
 
 ## maFile Full Export
 
@@ -500,6 +500,7 @@ viewer navigation should only show:
 - account list
 - code view
 - status view
+- login approvals and QR login approval
 - own password/username settings
 
 admin navigation should include:

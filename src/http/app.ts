@@ -792,8 +792,8 @@ export function createApp() {
 
   app.get('/api/accounts/:accountId/login-sessions', authMiddleware, async (c) => {
     const actor = c.get('user')
-    assertAdmin(actor)
     const accountId = requiredParam(c, 'accountId')
+    await assertAccountAccess(c, accountId, 'code')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
     const sessions = await listLoginSessions(c.env, accountId, accountKey, account)
@@ -803,9 +803,9 @@ export function createApp() {
 
   app.post('/api/accounts/:accountId/login-sessions/challenge-info', authMiddleware, async (c) => {
     const actor = c.get('user')
-    assertAdmin(actor)
     const input = await parseJson(c, challengeInfoSchema)
     const accountId = requiredParam(c, 'accountId')
+    await assertAccountAccess(c, accountId, 'code')
     const challenge = input.challengeUrl
       ? parseSteamQrChallenge(input.challengeUrl)
       : { version: Number(input.version || 1), clientId: String(input.clientId || '') }
@@ -822,9 +822,9 @@ export function createApp() {
 
   app.post('/api/accounts/:accountId/login-sessions/approve', authMiddleware, async (c) => {
     const actor = c.get('user')
-    assertAdmin(actor)
     const input = await parseJson(c, loginApprovalSchema)
     const accountId = requiredParam(c, 'accountId')
+    await assertAccountAccess(c, accountId, 'code')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
     try {
@@ -838,9 +838,9 @@ export function createApp() {
 
   app.post('/api/accounts/:accountId/login-sessions/deny', authMiddleware, async (c) => {
     const actor = c.get('user')
-    assertAdmin(actor)
     const input = await parseJson(c, loginApprovalSchema)
     const accountId = requiredParam(c, 'accountId')
+    await assertAccountAccess(c, accountId, 'code')
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
     try {

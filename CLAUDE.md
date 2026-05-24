@@ -52,6 +52,7 @@ This is the most load-bearing invariant. Changing it requires reading `docs/deci
 Consequences any new code must respect:
 - On account creation/import/transfer (`createEncryptedAccount`), grants are issued for **every active admin** automatically. Adding an admin retroactively does NOT grant past accounts (no rewrap path exists yet).
 - Granting an account to a viewer (`grantAccountToUser`) requires the calling admin to first unwrap the account key with their own grant (see `loadAccountKeyForUser`), then re-wrap it for the viewer.
+- Viewer login approval and QR login approval are allowed for assigned accounts through the `can_view_code` account permission and matching key grant; confirmations and maFile export remain admin-only.
 - Password changes and admin viewer-password resets must **never** rewrap grants — grant wrapping is bound to `APP_SECRET`, not to user passwords.
 - Rotating `APP_SECRET` invalidates every grant. Treat `APP_SECRET` as a production backup-critical secret.
 

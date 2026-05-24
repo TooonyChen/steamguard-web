@@ -467,7 +467,7 @@ export function AdminUsersPanel({
             <DialogHeader>
               <DialogTitle>Assign accounts to {assignDialog.user.username}</DialogTitle>
               <DialogDescription>
-                Toggle accounts to grant or revoke this viewer's access. Changes apply immediately.
+                Toggle accounts to grant or revoke this viewer's code and login approval access. Changes apply immediately.
               </DialogDescription>
             </DialogHeader>
             {accounts.length === 0 ? (

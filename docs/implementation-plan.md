@@ -267,10 +267,10 @@ Deliverables:
 
 Acceptance criteria:
 
-- Admin can view login attempts with IP, location, platform, and device name when Steam provides them.
-- Admin can approve or deny login attempts.
-- Admin can paste a Steam QR login URL and approve it.
-- viewer cannot access these endpoints.
+- Admin and assigned viewers can view login attempts with IP, location, platform, and device name when Steam provides them.
+- Admin and assigned viewers can approve or deny login attempts.
+- Admin and assigned viewers can paste or scan a Steam QR login URL and approve it.
+- viewers cannot access login approval endpoints for unassigned accounts.
 - No automatic approval rules exist.
 
 ## Phase 11: Remove Authenticator and Account Deletion
