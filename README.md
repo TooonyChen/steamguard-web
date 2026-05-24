@@ -96,52 +96,103 @@ This prints something like:
 
 Open [`wrangler.jsonc`](wrangler.jsonc) and replace `"replace-with-cloudflare-d1-database-id"` with the returned `database_id`.
 
-### 4. Set Worker secrets
+### 4. Fill in `.env`
 
-Two secrets are required in production.
-
-```bash
-# 32+ bytes of high-entropy randomness. Used to wrap per-account encryption
-# keys. BACK THIS UP — rotating it invalidates every account grant.
-bunx wrangler secret put APP_SECRET
-
-# The initial admin password. The bootstrap script reads this once,
-# hashes it into D1, then never reads it again. The admin will be
-# forced to change it on first login.
-bunx wrangler secret put INITIAL_ADMIN_PASSWORD
-```
-
-Suggested way to generate `APP_SECRET`:
+Two pieces of secret data are needed; both go into a local `.env` file (gitignored).
 
 ```bash
-openssl rand -base64 48
+cp .env.example .env
 ```
 
-### 5. Deploy
+Then open `.env` and replace both placeholders. Suggested generators:
 
-The composite `deploy` script builds the SPA, applies migrations on the remote D1, deploys the Worker, and bootstraps the initial admin (idempotently):
+```bash
+openssl rand -base64 48    # APP_SECRET           — random high-entropy string
+openssl rand -hex 32       # INITIAL_ADMIN_PASSWORD — write this down, you'll need it to log in
+```
+
+The resulting `.env` should look like:
+
+```bash
+APP_SECRET=<the openssl rand -base64 48 output>
+INITIAL_ADMIN_PASSWORD=<the openssl rand -hex 32 output>
+```
+
+> **The two values play different roles** — read the table in [Secrets cheatsheet](#secrets-cheatsheet) below if you want to know why.
+
+### 5. Push `APP_SECRET` to Cloudflare
+
+`bun run deploy` does **not** upload your `.env` to Cloudflare. The Worker reads `APP_SECRET` at runtime, so it has to live as a Worker secret. Push it once with this one-liner (reads the value from `.env` and pipes into wrangler):
+
+```bash
+grep '^APP_SECRET=' .env | cut -d= -f2- | bunx wrangler secret put APP_SECRET
+```
+
+(`INITIAL_ADMIN_PASSWORD` is **not** pushed to Cloudflare. It's only read by the local `bootstrap-admin` script when it talks to the remote D1 to create the first admin row. Pushing it as a Worker secret would just leak plaintext.)
+
+### 6. Deploy
 
 ```bash
 bun run deploy
 ```
 
-Output ends with the Worker URL. Visit it, log in as `admin` with the password you set in step 4, and you'll be prompted to change it immediately.
+This composite script does, in order:
 
-### 6. Done
+1. `vite build` — bundle the React SPA into `dist/client`
+2. `wrangler d1 migrations apply --remote` — run pending migrations on the remote D1
+3. `wrangler deploy --minify` — upload the Worker
+4. `bootstrap-admin -- --remote` — read `INITIAL_ADMIN_PASSWORD` from `.env`, hash it, insert the admin row into the remote D1 (idempotent — skipped if an admin already exists)
 
-- Use **Settings** to change your username if you want.
+The output ends with the Worker URL. The bindings list it prints should include `env.DB`, `env.ASSETS`, `env.ENVIRONMENT`, and `env.APP_SECRET` — if `APP_SECRET` is missing, step 5 didn't take.
+
+### 7. Log in and clean up
+
+Visit the Worker URL, log in:
+
+- Username: `admin`
+- Password: the value you wrote into `INITIAL_ADMIN_PASSWORD`
+
+You'll be forced to change the password immediately.
+
+After that, delete the `INITIAL_ADMIN_PASSWORD=...` line from `.env` — the bootstrap script will never read it again, and there's no reason to keep a plaintext password lying around. The `APP_SECRET` line can stay (it's gitignored, and the one-liner in step 5 reads from there if you ever want to rotate).
+
+### 8. Done
+
+- Use **Settings** to change your username.
 - Use **Steam** (admin only) to import a `.maFile` or set up / transfer an authenticator.
 - Use **Users** (admin only) to add viewers and assign them accounts.
 
 ---
 
+## Secrets cheatsheet
+
+This trips people up the first time. Four different "places to put secrets" exist; each is read by a different thing:
+
+| File / mechanism | Who reads it | Pushed to Cloudflare? |
+| --- | --- | --- |
+| `.env` | Local `bun run …` scripts (e.g. `bootstrap-admin`) | No |
+| `.dev.vars` | Local `wrangler dev` simulated Worker | No |
+| `wrangler secret put NAME` | The deployed Worker, as `c.env.NAME` | Yes (encrypted) |
+| `wrangler.jsonc` → `vars` | The deployed Worker, as `c.env.NAME` (plaintext) | Yes (plaintext — don't put secrets here) |
+
+For this project:
+
+- `APP_SECRET` is read by the Worker at runtime → `wrangler secret put` (and optionally also in `.env` / `.dev.vars` to make rotation / local dev easier)
+- `INITIAL_ADMIN_PASSWORD` is read by your local bootstrap script only → `.env` (and `.dev.vars` if you also want `bun run bootstrap-admin -- --local` to work)
+- `ENVIRONMENT` is the public flag returned by `/api/health` → `wrangler.jsonc` `vars`
+
+---
+
 ## Local development
 
-For local dev you need a separate `.dev.vars` file (this is `.gitignore`'d):
+Local dev needs **both** `.env` (read by `bun run …` scripts) and `.dev.vars` (read by `wrangler dev`). They contain the same two values; you can just copy:
 
 ```bash
+cp .env.example .env
 cp .env.example .dev.vars
-# Edit .dev.vars and set APP_SECRET and INITIAL_ADMIN_PASSWORD
+# Edit both. They should have identical content:
+#   APP_SECRET=<some value, doesn't need to match production>
+#   INITIAL_ADMIN_PASSWORD=<some value>
 ```
 
 Then:

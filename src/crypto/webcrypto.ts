@@ -1,7 +1,9 @@
 import type { EncryptedPayload } from '../types'
 import { base64ToBytes, bytesToBase64, bytesToBase64Url, bytesToUtf8, utf8ToBytes } from './encoding'
 
-const PASSWORD_ITERATIONS = 210_000
+// Cloudflare Workers' WebCrypto caps PBKDF2 iterations at 100_000.
+// See https://developers.cloudflare.com/workers/runtime-apis/web-crypto/
+const PASSWORD_ITERATIONS = 100_000
 const PASSWORD_SCHEME = `pbkdf2-sha256:${PASSWORD_ITERATIONS}`
 
 export function nowIso(): string {
