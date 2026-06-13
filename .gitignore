@@ -34,3 +34,7 @@ lerna-debug.log*
 
 # reference
 steamguard-cli/
+
+# imported secrets (plaintext tokens / maFiles — never commit)
+fsdownload*/
+*.maFile

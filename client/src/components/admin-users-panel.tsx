@@ -151,7 +151,7 @@ export function AdminUsersPanel({
   }
 
   async function deleteUser(user: User) {
-    if (!window.confirm(`Delete viewer "${user.username}"? This revokes all account grants.`)) {
+    if (!window.confirm(`Permanently delete viewer "${user.username}"? This removes the account entirely and frees the username for reuse. Use Disable instead if you may re-enable it later.`)) {
       return
     }
     setBusyUserId(user.id)

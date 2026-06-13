@@ -429,14 +429,19 @@ export function createApp() {
     const target = await findUserById(c.env, requiredParam(c, 'userId'))
     if (!target) notFound('User not found')
     if (target.role !== 'viewer') forbidden('Only viewer users can be deleted from this endpoint')
+    // Hard delete: fully remove the viewer and all rows that reference it. Use
+    // /disable for soft delete (status='disabled', re-enableable). audit_events
+    // keep their original actor_user_id (D1 does not enforce FKs) so the deleted
+    // viewer's history stays intact.
     await c.env.DB.batch([
       c.env.DB.prepare('DELETE FROM account_permissions WHERE user_id = ?').bind(target.id),
-      c.env.DB.prepare('UPDATE account_key_grants SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL').bind(nowIso(), target.id),
-      c.env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL').bind(nowIso(), target.id),
-      c.env.DB.prepare('UPDATE users SET status = ?, updated_at = ? WHERE id = ?').bind('disabled', nowIso(), target.id),
+      c.env.DB.prepare('DELETE FROM account_key_grants WHERE user_id = ?').bind(target.id),
+      c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(target.id),
+      c.env.DB.prepare('DELETE FROM auth_flows WHERE created_by = ?').bind(target.id),
+      c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(target.id),
     ])
     await audit(c.env, { actorUserId: actor.id, action: 'viewer_deleted', targetType: 'user', targetId: target.id, outcome: 'success' })
-    return c.json(jsonOk({ deleted: true, mode: 'soft-delete' }))
+    return c.json(jsonOk({ deleted: true, mode: 'hard-delete' }))
   })
 
   app.post('/api/admin/users/:userId/reset-password', authMiddleware, async (c) => {
