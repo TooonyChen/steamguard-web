@@ -156,3 +156,31 @@ Practical interpretation:
 
 - algorithms and API wire behavior in `steamguard/` can be ported.
 - CLI prompt/control-flow files under `src/commands/` can inform web flow state machines, but should not be copied.
+
+## 2026-07-07: HKDF for APP_SECRET-Derived Keys (Encrypted Payload v2)
+
+Decision: derive grant-wrap and flow-encryption keys from `APP_SECRET` with HKDF-SHA256 instead of PBKDF2 (100k iterations).
+
+- `EncryptedPayload` is now versioned: `v: 2` means HKDF derivation, `v: 1` means the legacy PBKDF2 derivation. `decryptJson` accepts both; all new writes are v2.
+- `account_key_grants` rows written before this change are upgraded opportunistically: `loadAccountKeyForUser` rewraps a v1 grant as v2 (best effort) after a successful unwrap, so the PBKDF2 cost is paid at most once per grant.
+- Grant `wrap_scheme` is now `app-secret/aes-256-gcm:v2`.
+- User password hashing keeps PBKDF2 100k — passwords are low-entropy and need stretching. Only machine-secret derivation changed.
+
+Reason:
+
+- `APP_SECRET` is a high-entropy machine secret; PBKDF2 stretching added ~100k iterations of CPU per secret-backed request without any security benefit over a single-pass KDF.
+
+## 2026-07-07: Login Throttling
+
+Decision: D1-backed fixed-window throttling on `POST /api/auth/login`, checked before password verification.
+
+- 5 failures per username or 20 per IP (`cf-connecting-ip`, hashed) within 15 minutes locks that key for 15 minutes; locked attempts return 429 `rate_limited` without running PBKDF2.
+- A successful login clears only the per-username counter — never the per-IP counter, so a legit login from a shared IP cannot reset an attacker's budget.
+- Counters live in the `login_attempts` table (migration 0002); throttled attempts are intentionally not audited to keep `audit_events` from being flooded during an attack.
+
+## 2026-07-07: Retention Cleanup Cron
+
+Decision: a daily scheduled handler (`triggers.crons`, 03:17 UTC) runs `runCleanup` (`src/maintenance/cleanup.ts`).
+
+- Deletes: expired sessions and sessions revoked >30 days ago; `auth_flows` >24h past expiry; stale unlocked `login_attempts`; `audit_events` older than `AUDIT_RETENTION_DAYS` (env var, default 365; `0` disables audit pruning).
+- `GET /api/admin/audit` paginates via `limit` (1–200, default 100) and `before` (ISO cursor on `created_at`), returning `nextBefore`.

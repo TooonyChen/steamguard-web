@@ -46,7 +46,7 @@ Local development requires `.dev.vars` with at least `APP_SECRET` and (for first
 This is the most load-bearing invariant. Changing it requires reading `docs/decisions.md` first.
 
 1. **Account blob**: each Steam account's full SteamGuardAccount JSON (shared_secret, identity_secret, tokens, revocation_code, …) is AES-256-GCM encrypted with a per-account 32-byte `accountKey`. Stored in `steam_account_secrets.encrypted_blob`. AAD binds `account_id` + schema version (`accountBlobAad` in `src/db/accounts.ts`).
-2. **Per-user grant**: the raw `accountKey` is wrapped per `(user_id, account_id)` pair with a key derived from `APP_SECRET` via PBKDF2 (`src/vault/vault.ts`). The wrapped blob lives in `account_key_grants.wrapped_account_key`. AAD binds `user_id:account_id`.
+2. **Per-user grant**: the raw `accountKey` is wrapped per `(user_id, account_id)` pair with a key derived from `APP_SECRET` via HKDF-SHA256 (`src/vault/vault.ts`; encrypted payload `v: 2`). Legacy rows use PBKDF2 (`v: 1`) and are auto-upgraded on first unwrap in `loadAccountKeyForUser`. The wrapped blob lives in `account_key_grants.wrapped_account_key`. AAD binds `user_id:account_id`.
 3. **Permission flags**: `account_permissions` rows decide which capabilities (`can_view_code`, `can_view_status`) a viewer has for a given account. RBAC checks read from this table — never from account name or steam_id.
 
 Consequences any new code must respect:
@@ -93,7 +93,8 @@ All Steam-facing logic is here. The split mirrors the upstream Rust `steamguard/
 - Two routes the UI must keep prominent: red-banner warning on the Full `.maFile` download button, and an explicit "must change password" gate after first login.
 
 ### Database
-- D1 only. Migrations under `migrations/` are applied with `wrangler d1 migrations apply`. The current schema lives in `0001_initial.sql` and matches the tables documented in `docs/architecture.md` (`users`, `sessions`, `vaults`, `steam_accounts`, `steam_account_secrets`, `account_key_grants`, `account_permissions`, `auth_flows`, `audit_events`, `bootstrap_state`).
+- D1 only. Migrations under `migrations/` are applied with `wrangler d1 migrations apply`. The base schema lives in `0001_initial.sql` (`users`, `sessions`, `vaults`, `steam_accounts`, `steam_account_secrets`, `account_key_grants`, `account_permissions`, `auth_flows`, `audit_events`, `bootstrap_state`); `0002` adds `login_attempts` (login throttling) and cleanup indexes.
+- A daily cron trigger (`wrangler.jsonc` `triggers.crons`) runs `runCleanup` (`src/maintenance/cleanup.ts`): expired sessions, stale auth flows/throttle rows, and audit events older than `AUDIT_RETENTION_DAYS` (default 365, `0` = keep forever).
 - `username_normalized` is the lowercase form and is the unique key for username lookups.
 - Deletion semantics for viewers is **soft delete** (`status = 'disabled'` + revoke sessions + revoke grants + drop permissions). Accounts are hard-deleted but grants are marked revoked rather than removed.
 - `assertMutableAdminTarget` enforces "cannot disable/delete the last active admin". Preserve this when changing admin management code.
@@ -103,4 +104,4 @@ All Steam-facing logic is here. The split mirrors the upstream Rust `steamguard/
 - All IDs are prefixed UUIDs: `user_<uuid>`, `acct_<uuid>`, `sess_<uuid>`, `grant_<uuid>`, `perm_<uuid>`, `vault_<uuid>` (`randomId(prefix)` in `src/crypto/webcrypto.ts`).
 - Timestamps are ISO strings via `nowIso()`.
 - `decryptAccountSecret` + `saveAccountSecret` share the same `accountKey` for a given request; never decrypt-then-rewrap-with-a-new-key as part of normal flows.
-- Tests run in the `node` environment (vitest), not in a Workers runtime. Crypto code uses globalThis `crypto.subtle`, which works in both.
+- Tests run in the `node` environment (vitest), not in a Workers runtime. Crypto code uses globalThis `crypto.subtle`, which works in both. HTTP-layer tests (`tests/http.test.ts`) exercise the real Hono app via `app.request()` against a `node:sqlite`-backed D1 shim (`tests/helpers/d1.ts`) with migrations applied; global `fetch` is stubbed so nothing reaches Steam.

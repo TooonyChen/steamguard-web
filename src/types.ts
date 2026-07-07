@@ -30,6 +30,7 @@ export type Bindings = {
   INITIAL_ADMIN_PASSWORD?: string
   ENVIRONMENT?: string
   ASSETS?: Fetcher
+  AUDIT_RETENTION_DAYS?: string
 }
 
 export type Variables = {
@@ -79,8 +80,10 @@ export interface SteamAccountRow {
   updated_at: string
 }
 
+// v1: key derived from APP_SECRET via PBKDF2 (legacy, decrypt-only).
+// v2: key derived from APP_SECRET via HKDF-SHA256 (all new writes).
 export interface EncryptedPayload {
-  v: 1
+  v: 1 | 2
   alg: 'AES-256-GCM'
   nonce: string
   ciphertext: string

@@ -69,12 +69,36 @@ export async function sha256Base64Url(input: string): Promise<string> {
   return bytesToBase64Url(new Uint8Array(digest))
 }
 
-async function deriveSecretKey(secret: string, purpose: string): Promise<Uint8Array> {
+// Legacy v1 derivation. APP_SECRET is a high-entropy machine secret, so the
+// PBKDF2 stretching bought nothing over a single-pass KDF while costing 100k
+// iterations on every secret-backed request. Kept decrypt-only for payloads
+// written before the v2 (HKDF) migration.
+async function deriveSecretKeyPbkdf2V1(secret: string, purpose: string): Promise<Uint8Array> {
   return pbkdf2(secret, utf8ToBytes(`steamguard-web:${purpose}`), 100_000, 256)
 }
 
-export async function encryptJson(secret: string, purpose: string, value: unknown, aad?: string): Promise<string> {
-  const keyBytes = await deriveSecretKey(secret, purpose)
+async function deriveSecretKeyHkdfV2(secret: string, purpose: string): Promise<Uint8Array> {
+  const baseKey = await crypto.subtle.importKey('raw', toArrayBuffer(utf8ToBytes(secret)), 'HKDF', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: toArrayBuffer(utf8ToBytes('steamguard-web:hkdf:v2')),
+      info: toArrayBuffer(utf8ToBytes(`steamguard-web:${purpose}`)),
+    },
+    baseKey,
+    256,
+  )
+  return new Uint8Array(bits)
+}
+
+async function deriveSecretKey(secret: string, purpose: string, version: EncryptedPayload['v']): Promise<Uint8Array> {
+  if (version === 1) return deriveSecretKeyPbkdf2V1(secret, purpose)
+  return deriveSecretKeyHkdfV2(secret, purpose)
+}
+
+async function encryptJsonWithVersion(secret: string, purpose: string, value: unknown, aad: string | undefined, version: EncryptedPayload['v']): Promise<string> {
+  const keyBytes = await deriveSecretKey(secret, purpose, version)
   const key = await importRawKey(keyBytes, ['encrypt'])
   const nonce = randomBytes(12)
   const payload = utf8ToBytes(JSON.stringify(value))
@@ -84,7 +108,7 @@ export async function encryptJson(secret: string, purpose: string, value: unknow
     toArrayBuffer(payload),
   )
   const encrypted: EncryptedPayload = {
-    v: 1,
+    v: version,
     alg: 'AES-256-GCM',
     nonce: bytesToBase64(nonce),
     ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
@@ -92,9 +116,23 @@ export async function encryptJson(secret: string, purpose: string, value: unknow
   return JSON.stringify(encrypted)
 }
 
+export async function encryptJson(secret: string, purpose: string, value: unknown, aad?: string): Promise<string> {
+  return encryptJsonWithVersion(secret, purpose, value, aad, 2)
+}
+
+// Only for tests and migration tooling: writes the legacy PBKDF2-derived format.
+export async function encryptJsonLegacyV1(secret: string, purpose: string, value: unknown, aad?: string): Promise<string> {
+  return encryptJsonWithVersion(secret, purpose, value, aad, 1)
+}
+
+export function encryptedPayloadVersion(encryptedText: string): EncryptedPayload['v'] {
+  return (JSON.parse(encryptedText) as EncryptedPayload).v
+}
+
 export async function decryptJson<T>(secret: string, purpose: string, encryptedText: string, aad?: string): Promise<T> {
   const encrypted = JSON.parse(encryptedText) as EncryptedPayload
-  const keyBytes = await deriveSecretKey(secret, purpose)
+  if (encrypted.v !== 1 && encrypted.v !== 2) throw new Error(`Unsupported encrypted payload version: ${encrypted.v}`)
+  const keyBytes = await deriveSecretKey(secret, purpose, encrypted.v)
   const key = await importRawKey(keyBytes, ['decrypt'])
   const plaintext = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: toArrayBuffer(base64ToBytes(encrypted.nonce)), additionalData: aad ? toArrayBuffer(utf8ToBytes(aad)) : undefined },

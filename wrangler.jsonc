@@ -9,11 +9,15 @@
   "vars": {
     "ENVIRONMENT": "production"
   },
+  // Daily retention cleanup (sessions, auth flows, login throttle counters, audit events).
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "steamguard-web",
-      "database_id": "replace-with-cloudflare-d1-database-id"
+      "database_id": "7ed1b2cd-487b-4cb4-bdb1-b54608680bc8"
     }
   ],
   "assets": {

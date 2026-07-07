@@ -6,6 +6,7 @@ import { EAuthSessionGuardType } from '../generated/steam-protobuf'
 import type { AppEnv, UserRow } from '../types'
 import { audit } from '../audit/audit'
 import { createSession, revokeSession, authMiddleware, currentFreshUser } from '../auth/session'
+import { assertLoginAllowed, clearLoginFailures, recordLoginFailure } from '../auth/throttle'
 import { createUser, activeAdminCount, findUserById, findUserByUsername, listAccountsForUser, toAuthUser } from '../db/queries'
 import { createEncryptedAccount, decryptAccountSecret, grantAccountToUser, revokeAccountFromUser, saveAccountSecret } from '../db/accounts'
 import { loadAccountKeyForUser } from '../vault/vault'
@@ -266,28 +267,33 @@ export function createApp() {
 
   app.post('/api/auth/login', async (c) => {
     const input = await parseJson(c, loginSchema)
+    const ip = requestIp(c)
+    await assertLoginAllowed(c.env, input.username, ip)
     const row = await findUserByUsername(c.env, input.username)
     if (!row || row.status !== 'active') {
+      await recordLoginFailure(c.env, input.username, ip)
       await audit(c.env, {
         action: 'login_failed',
         outcome: 'failure',
         metadata: { username: input.username },
-        ip: requestIp(c),
+        ip,
         userAgent: requestUserAgent(c),
       })
       forbidden('Invalid username or password')
     }
     const valid = await verifyPassword(input.password, row.password_salt, row.password_hash, row.password_hash_scheme)
     if (!valid) {
+      await recordLoginFailure(c.env, input.username, ip)
       await audit(c.env, {
         actorUserId: row.id,
         action: 'login_failed',
         outcome: 'failure',
-        ip: requestIp(c),
+        ip,
         userAgent: requestUserAgent(c),
       })
       forbidden('Invalid username or password')
     }
+    await clearLoginFailures(c.env, input.username)
     await createSession(c, row.id)
     await c.env.DB.prepare('UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?').bind(nowIso(), nowIso(), row.id).run()
     await audit(c.env, {
@@ -759,10 +765,16 @@ export function createApp() {
 
   app.get('/api/admin/audit', authMiddleware, async (c) => {
     assertAdmin(c.get('user'))
-    const { results = [] } = await c.env.DB
-      .prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 200')
-      .all<Record<string, unknown>>()
-    return c.json(jsonOk({ events: results }))
+    const rawLimit = Number(c.req.query('limit') ?? 100)
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 100
+    const before = c.req.query('before')
+    const statement = before
+      ? c.env.DB.prepare('SELECT * FROM audit_events WHERE created_at < ? ORDER BY created_at DESC LIMIT ?').bind(before, limit)
+      : c.env.DB.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT ?').bind(limit)
+    const { results = [] } = await statement.all<Record<string, unknown>>()
+    const last = results[results.length - 1]
+    const nextBefore = results.length === limit && last ? String(last.created_at ?? '') || null : null
+    return c.json(jsonOk({ events: results, nextBefore }))
   })
 
   app.post('/api/authenticator/setup/begin', authMiddleware, async (c) => {

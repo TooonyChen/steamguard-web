@@ -30,6 +30,10 @@ export function conflict(message: string): never {
   throw new HttpError(409, message, 'conflict')
 }
 
+export function tooManyRequests(message: string): never {
+  throw new HttpError(429, message, 'rate_limited')
+}
+
 export function notImplemented(message: string): never {
   throw new HttpError(501, message, 'not_implemented')
 }
