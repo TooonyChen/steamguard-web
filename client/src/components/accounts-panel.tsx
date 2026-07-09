@@ -68,7 +68,7 @@ type SteamConfirmation = {
 type ConfirmationsPanelState = {
   accountId: string;
   accountName: string;
-  confirmations: SteamConfirmation[];
+  confirmations: SteamConfirmation[] | null;
 };
 
 type LoginSession = {
@@ -90,13 +90,23 @@ type LoginSession = {
 type LoginSessionsPanelState = {
   accountId: string;
   accountName: string;
-  sessions: LoginSession[];
+  sessions: LoginSession[] | null;
 };
 
 type QrReviewState = {
   accountId: string;
   accountName: string;
   challengeUrl: string;
+};
+
+type MessageState = {
+  kind: "success" | "error";
+  title: string;
+  description?: string;
+};
+
+type PanelLoadOptions = {
+  clearMessage?: boolean;
 };
 
 function confirmationSummary(confirmation: SteamConfirmation): string[] {
@@ -123,9 +133,7 @@ export function AccountsPanel({
   role: Role;
   onRefresh: () => Promise<void>;
 }) {
-  const [message, setMessage] = useState<
-    { kind: "success" | "error"; title: string; description?: string } | null
-  >(null);
+  const [message, setMessage] = useState<MessageState | null>(null);
   const [qrChallenges, setQrChallenges] = useState<Record<string, string>>({});
   const [exportAccount, setExportAccount] = useState<Account | null>(null);
   const [confirmationsPanel, setConfirmationsPanel] =
@@ -208,9 +216,17 @@ export function AccountsPanel({
     }
   }
 
-  async function listConfirmations(account: Account) {
-    setMessage(null);
+  async function listConfirmations(
+    account: Account,
+    options: PanelLoadOptions = {},
+  ) {
+    if (options.clearMessage !== false) setMessage(null);
     setLoginSessionsPanel(null);
+    setConfirmationsPanel({
+      accountId: account.id,
+      accountName: account.accountName,
+      confirmations: null,
+    });
     try {
       const data = await api<{ confirmations: SteamConfirmation[] }>(
         `/api/accounts/${account.id}/confirmations`,
@@ -221,12 +237,22 @@ export function AccountsPanel({
         confirmations: data.confirmations,
       });
     } catch (err) {
+      setConfirmationsPanel(null);
       notifyError(err, "Failed to load confirmations");
     }
   }
 
-  async function listLoginSessions(account: Account) {
+  async function listLoginSessions(
+    account: Account,
+    options: PanelLoadOptions = {},
+  ) {
+    if (options.clearMessage !== false) setMessage(null);
     setConfirmationsPanel(null);
+    setLoginSessionsPanel({
+      accountId: account.id,
+      accountName: account.accountName,
+      sessions: null,
+    });
     try {
       const data = await api<{ sessions: LoginSession[] }>(
         `/api/accounts/${account.id}/login-sessions`,
@@ -237,6 +263,7 @@ export function AccountsPanel({
         sessions: data.sessions,
       });
     } catch (err) {
+      setLoginSessionsPanel(null);
       notifyError(err, "Failed to load login approvals");
     }
   }
@@ -307,12 +334,15 @@ export function AccountsPanel({
       setQrReviewError(null);
       if (input.challengeUrl) setAccountQr(input.accountId, "");
       if (loginSessionsPanel?.accountId === input.accountId) {
-        await listLoginSessions({
-          id: input.accountId,
-          accountName: input.accountName,
-          steamId: null,
-          status: "active",
-        });
+        await listLoginSessions(
+          {
+            id: input.accountId,
+            accountName: input.accountName,
+            steamId: null,
+            status: "active",
+          },
+          { clearMessage: false },
+        );
       }
     } catch (err) {
       const text = err instanceof Error ? err.message : "Login action failed";
@@ -345,12 +375,15 @@ export function AccountsPanel({
       notifySuccess(
         action === "accept" ? "Confirmation accepted" : "Confirmation denied",
       );
-      await listConfirmations({
-        id: confirmationsPanel.accountId,
-        accountName: confirmationsPanel.accountName,
-        steamId: null,
-        status: "active",
-      });
+      await listConfirmations(
+        {
+          id: confirmationsPanel.accountId,
+          accountName: confirmationsPanel.accountName,
+          steamId: null,
+          status: "active",
+        },
+        { clearMessage: false },
+      );
     } catch (err) {
       notifyError(err, "Confirmation action failed");
     } finally {
@@ -393,6 +426,8 @@ export function AccountsPanel({
       setDownloadingExport(false);
     }
   }
+
+  const pageMessage = confirmationsPanel || loginSessionsPanel ? null : message;
 
   return (
     <div className="flex flex-col gap-4">
@@ -476,18 +511,18 @@ export function AccountsPanel({
         </div>
       </div>
 
-      {message ? (
+      {pageMessage ? (
         <Alert
-          variant={message.kind === "error" ? "destructive" : "default"}
+          variant={pageMessage.kind === "error" ? "destructive" : "default"}
         >
-          {message.kind === "error" ? (
+          {pageMessage.kind === "error" ? (
             <AlertTriangleIcon />
           ) : (
             <CheckIcon />
           )}
-          <AlertTitle>{message.title}</AlertTitle>
-          {message.description ? (
-            <AlertDescription>{message.description}</AlertDescription>
+          <AlertTitle>{pageMessage.title}</AlertTitle>
+          {pageMessage.description ? (
+            <AlertDescription>{pageMessage.description}</AlertDescription>
           ) : null}
         </Alert>
       ) : null}
@@ -666,119 +701,150 @@ export function AccountsPanel({
         </DialogContent>
       </Dialog>
 
-      {loginSessionsPanel ? (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle>Login approvals</CardTitle>
-                <CardDescription>
-                  {loginSessionsPanel.accountName} ·{" "}
-                  {loginSessionsPanel.sessions.length} pending
-                </CardDescription>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  void listLoginSessions({
-                    id: loginSessionsPanel.accountId,
-                    accountName: loginSessionsPanel.accountName,
-                    steamId: null,
-                    status: "active",
-                  })
-                }
+      <Dialog
+        open={Boolean(loginSessionsPanel)}
+        onOpenChange={(open) => {
+          if (!open) setLoginSessionsPanel(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Login approvals</DialogTitle>
+            <DialogDescription>
+              {loginSessionsPanel?.accountName}
+              {loginSessionsPanel?.sessions
+                ? ` · ${loginSessionsPanel.sessions.length} pending`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {message && loginSessionsPanel ? (
+            <Alert
+              variant={message.kind === "error" ? "destructive" : "default"}
+            >
+              {message.kind === "error" ? <AlertTriangleIcon /> : <CheckIcon />}
+              <AlertTitle>{message.title}</AlertTitle>
+              {message.description ? (
+                <AlertDescription>{message.description}</AlertDescription>
+              ) : null}
+            </Alert>
+          ) : null}
+          <div className="flex max-h-[55vh] flex-col gap-3 overflow-y-auto">
+            {!loginSessionsPanel?.sessions ? (
+              <div
+                aria-live="polite"
+                className="flex items-center justify-center gap-2 rounded-lg border bg-muted/30 p-6 text-center text-sm text-muted-foreground"
               >
-                <RefreshCwIcon />
-                Refresh
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {loginSessionsPanel.sessions.length === 0 ? (
+                <RefreshCwIcon className="size-4 animate-spin" />
+                <span>Loading login approvals from Steam…</span>
+              </div>
+            ) : loginSessionsPanel.sessions.length === 0 ? (
               <div className="rounded-lg border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
                 No pending Steam login approvals for this account.
               </div>
             ) : (
-              loginSessionsPanel.sessions.map((session) => (
-                <div
-                  key={session.clientId}
-                  className="flex flex-col gap-3 rounded-lg border bg-background p-4 md:flex-row md:items-start md:justify-between"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="secondary">
-                        client {session.clientId}
-                      </Badge>
-                      <span className="font-medium">
-                        {session.deviceFriendlyName || "Steam login request"}
-                      </span>
+              loginSessionsPanel.sessions.map((session) => {
+                const acceptBusyKey = `${loginSessionsPanel.accountId}:${session.clientId}:accept`;
+                const denyBusyKey = `${loginSessionsPanel.accountId}:${session.clientId}:deny`;
+
+                return (
+                  <div
+                    key={session.clientId}
+                    className="flex flex-col gap-3 rounded-lg border bg-background p-4 md:flex-row md:items-start md:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary">
+                          client {session.clientId}
+                        </Badge>
+                        <span className="font-medium">
+                          {session.deviceFriendlyName || "Steam login request"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {[
+                          session.ip,
+                          session.city,
+                          session.state,
+                          session.country,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "Location unavailable"}
+                      </p>
+                      <p className="mt-2 font-mono text-xs text-muted-foreground">
+                        version {session.version ?? 1}
+                        {session.platformType !== undefined
+                          ? ` · platform ${session.platformType}`
+                          : ""}
+                      </p>
                     </div>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      {[
-                        session.ip,
-                        session.city,
-                        session.state,
-                        session.country,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ") || "Location unavailable"}
-                    </p>
-                    <p className="mt-2 font-mono text-xs text-muted-foreground">
-                      version {session.version ?? 1}
-                      {session.platformType !== undefined
-                        ? ` · platform ${session.platformType}`
-                        : ""}
-                    </p>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={loginBusy !== null}
+                        onClick={() =>
+                          void submitLoginApproval(
+                            {
+                              accountId: loginSessionsPanel.accountId,
+                              accountName: loginSessionsPanel.accountName,
+                              clientId: session.clientId,
+                              version: session.version ?? 1,
+                            },
+                            true,
+                          )
+                        }
+                      >
+                        <CheckIcon />
+                        {loginBusy === acceptBusyKey ? "Accepting" : "Accept"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={loginBusy !== null}
+                        onClick={() =>
+                          void submitLoginApproval(
+                            {
+                              accountId: loginSessionsPanel.accountId,
+                              accountName: loginSessionsPanel.accountName,
+                              clientId: session.clientId,
+                              version: session.version ?? 1,
+                            },
+                            false,
+                          )
+                        }
+                      >
+                        <XIcon />
+                        {loginBusy === denyBusyKey ? "Denying" : "Deny"}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={loginBusy !== null}
-                      onClick={() =>
-                        void submitLoginApproval(
-                          {
-                            accountId: loginSessionsPanel.accountId,
-                            accountName: loginSessionsPanel.accountName,
-                            clientId: session.clientId,
-                            version: session.version ?? 1,
-                          },
-                          true,
-                        )
-                      }
-                    >
-                      <CheckIcon />
-                      Accept
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={loginBusy !== null}
-                      onClick={() =>
-                        void submitLoginApproval(
-                          {
-                            accountId: loginSessionsPanel.accountId,
-                            accountName: loginSessionsPanel.accountName,
-                            clientId: session.clientId,
-                            version: session.version ?? 1,
-                          },
-                          false,
-                        )
-                      }
-                    >
-                      <XIcon />
-                      Deny
-                    </Button>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
-          </CardContent>
-        </Card>
-      ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!loginSessionsPanel || !loginSessionsPanel.sessions}
+              onClick={() => {
+                if (!loginSessionsPanel) return;
+                void listLoginSessions({
+                  id: loginSessionsPanel.accountId,
+                  accountName: loginSessionsPanel.accountName,
+                  steamId: null,
+                  status: "active",
+                });
+              }}
+            >
+              <RefreshCwIcon />
+              Refresh
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {qrReview ? (
         <AlertDialog
@@ -883,100 +949,134 @@ export function AccountsPanel({
         </AlertDialog>
       ) : null}
 
-      {confirmationsPanel ? (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle>Confirmations</CardTitle>
-                <CardDescription>
-                  {confirmationsPanel.accountName} ·{" "}
-                  {confirmationsPanel.confirmations.length} pending
-                </CardDescription>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  void listConfirmations({
-                    id: confirmationsPanel.accountId,
-                    accountName: confirmationsPanel.accountName,
-                    steamId: null,
-                    status: "active",
-                  })
-                }
+      <Dialog
+        open={Boolean(confirmationsPanel)}
+        onOpenChange={(open) => {
+          if (!open) setConfirmationsPanel(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Confirmations</DialogTitle>
+            <DialogDescription>
+              {confirmationsPanel?.accountName}
+              {confirmationsPanel?.confirmations
+                ? ` · ${confirmationsPanel.confirmations.length} pending`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {message && confirmationsPanel ? (
+            <Alert
+              variant={message.kind === "error" ? "destructive" : "default"}
+            >
+              {message.kind === "error" ? <AlertTriangleIcon /> : <CheckIcon />}
+              <AlertTitle>{message.title}</AlertTitle>
+              {message.description ? (
+                <AlertDescription>{message.description}</AlertDescription>
+              ) : null}
+            </Alert>
+          ) : null}
+          <div className="flex max-h-[55vh] flex-col gap-3 overflow-y-auto">
+            {!confirmationsPanel?.confirmations ? (
+              <div
+                aria-live="polite"
+                className="flex items-center justify-center gap-2 rounded-lg border bg-muted/30 p-6 text-center text-sm text-muted-foreground"
               >
-                <RefreshCwIcon />
-                Refresh
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {confirmationsPanel.confirmations.length === 0 ? (
+                <RefreshCwIcon className="size-4 animate-spin" />
+                <span>Loading confirmations from Steam…</span>
+              </div>
+            ) : confirmationsPanel.confirmations.length === 0 ? (
               <div className="rounded-lg border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
                 No pending Steam mobile confirmations for this account.
               </div>
             ) : (
-              confirmationsPanel.confirmations.map((confirmation) => (
-                <div
-                  key={confirmation.id}
-                  className="flex flex-col gap-3 rounded-lg border bg-background p-4 md:flex-row md:items-start md:justify-between"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="secondary">
-                        {confirmation.type_name || `type ${confirmation.type}`}
-                      </Badge>
-                      <span className="font-medium">
-                        {confirmation.headline || confirmation.id}
-                      </span>
-                    </div>
-                    {confirmationSummary(confirmation).length ? (
-                      <div className="mt-2 space-y-1 text-sm text-muted-foreground">
-                        {confirmationSummary(confirmation).map((line) => (
-                          <p key={line}>{line}</p>
-                        ))}
+              confirmationsPanel.confirmations.map((confirmation) => {
+                const acceptBusyKey = `${confirmation.id}:accept`;
+                const denyBusyKey = `${confirmation.id}:deny`;
+
+                return (
+                  <div
+                    key={confirmation.id}
+                    className="flex flex-col gap-3 rounded-lg border bg-background p-4 md:flex-row md:items-start md:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary">
+                          {confirmation.type_name ||
+                            `type ${confirmation.type}`}
+                        </Badge>
+                        <span className="font-medium">
+                          {confirmation.headline || confirmation.id}
+                        </span>
                       </div>
-                    ) : null}
-                    <p className="mt-2 font-mono text-xs text-muted-foreground">
-                      id {confirmation.id}
-                      {confirmation.creator_id
-                        ? ` · creator ${confirmation.creator_id}`
-                        : ""}
-                    </p>
+                      {confirmationSummary(confirmation).length ? (
+                        <div className="mt-2 space-y-1 text-sm text-muted-foreground">
+                          {confirmationSummary(confirmation).map((line) => (
+                            <p key={line}>{line}</p>
+                          ))}
+                        </div>
+                      ) : null}
+                      <p className="mt-2 font-mono text-xs text-muted-foreground">
+                        id {confirmation.id}
+                        {confirmation.creator_id
+                          ? ` · creator ${confirmation.creator_id}`
+                          : ""}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={confirmationBusy !== null}
+                        onClick={() =>
+                          void actOnConfirmation(confirmation, "accept")
+                        }
+                      >
+                        <CheckIcon />
+                        {confirmationBusy === acceptBusyKey
+                          ? "Accepting"
+                          : "Accept"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={confirmationBusy !== null}
+                        onClick={() =>
+                          void actOnConfirmation(confirmation, "deny")
+                        }
+                      >
+                        <XIcon />
+                        {confirmationBusy === denyBusyKey ? "Denying" : "Deny"}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={confirmationBusy !== null}
-                      onClick={() =>
-                        void actOnConfirmation(confirmation, "accept")
-                      }
-                    >
-                      <CheckIcon />
-                      Accept
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={confirmationBusy !== null}
-                      onClick={() =>
-                        void actOnConfirmation(confirmation, "deny")
-                      }
-                    >
-                      <XIcon />
-                      Deny
-                    </Button>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
-          </CardContent>
-        </Card>
-      ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!confirmationsPanel || !confirmationsPanel.confirmations}
+              onClick={() => {
+                if (!confirmationsPanel) return;
+                void listConfirmations({
+                  id: confirmationsPanel.accountId,
+                  accountName: confirmationsPanel.accountName,
+                  steamId: null,
+                  status: "active",
+                });
+              }}
+            >
+              <RefreshCwIcon />
+              Refresh
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <QrLoginScannerDialog
         accountName={scanAccount?.accountName || ""}
