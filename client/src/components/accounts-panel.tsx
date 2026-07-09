@@ -6,14 +6,16 @@ import {
   CheckIcon,
   DownloadIcon,
   FileInputIcon,
-  KeyRoundIcon,
   ListChecksIcon,
   QrCodeIcon,
   RefreshCwIcon,
+  ShieldIcon,
   XIcon,
 } from "lucide-react";
 
 import { api } from "@/api";
+import { cn } from "@/lib/utils";
+import { LiveCode } from "@/components/live-code";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -121,7 +123,6 @@ export function AccountsPanel({
   role: Role;
   onRefresh: () => Promise<void>;
 }) {
-  const [codes, setCodes] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<
     { kind: "success" | "error"; title: string; description?: string } | null
   >(null);
@@ -132,6 +133,8 @@ export function AccountsPanel({
   const [loginSessionsPanel, setLoginSessionsPanel] =
     useState<LoginSessionsPanelState | null>(null);
   const [scanAccount, setScanAccount] = useState<Account | null>(null);
+  const [qrDialogAccount, setQrDialogAccount] = useState<Account | null>(null);
+  const [qrDialogError, setQrDialogError] = useState<string | null>(null);
   const [qrReview, setQrReview] = useState<QrReviewState | null>(null);
   const [qrReviewError, setQrReviewError] = useState<string | null>(null);
   const [qrReviewInfo, setQrReviewInfo] = useState<LoginSession | null>(null);
@@ -180,60 +183,6 @@ export function AccountsPanel({
   function notifyError(err: unknown, fallback: string) {
     const text = err instanceof Error ? err.message : fallback;
     setMessage({ kind: "error", title: fallback, description: text });
-  }
-
-  async function copyToClipboard(value: string): Promise<boolean> {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value);
-        return true;
-      }
-    } catch {
-      // fall through to legacy path
-    }
-    try {
-      const textarea = document.createElement("textarea");
-      textarea.value = value;
-      textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      const ok = document.execCommand("copy");
-      textarea.remove();
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-
-  async function loadCode(accountId: string) {
-    setMessage(null);
-    try {
-      const data = await api<{
-        code: string;
-        secondsRemaining: number;
-        serverTimeSource: string;
-      }>(`/api/accounts/${accountId}/code`);
-      setCodes((current) => ({
-        ...current,
-        [accountId]: `${data.code} · ${data.secondsRemaining}s · ${data.serverTimeSource}`,
-      }));
-      const copied = await copyToClipboard(data.code);
-      if (copied) {
-        notifySuccess(
-          `Code ${data.code} copied`,
-          `Valid for ${data.secondsRemaining}s (server time via ${data.serverTimeSource}).`,
-        );
-      } else {
-        notifySuccess(
-          `Code ${data.code}`,
-          "Clipboard copy was blocked by the browser — copy the code manually.",
-        );
-      }
-    } catch (err) {
-      notifyError(err, "Failed to load Steam Guard code");
-    }
   }
 
   async function importMafile(event: React.FormEvent) {
@@ -299,14 +248,12 @@ export function AccountsPanel({
   function reviewQr(account: Account, challengeUrl: string) {
     const trimmed = challengeUrl.trim();
     if (!isSteamQrChallenge(trimmed)) {
-      setMessage({
-        kind: "error",
-        title: "Invalid Steam QR URL",
-        description: "Paste or scan a URL like https://s.team/q/1/123456789.",
-      });
+      setQrDialogError("Paste or scan a URL like https://s.team/q/1/123456789.");
       return;
     }
     setMessage(null);
+    setQrDialogError(null);
+    setQrDialogAccount(null);
     setQrReview({
       accountId: account.id,
       accountName: account.accountName,
@@ -317,6 +264,8 @@ export function AccountsPanel({
   function handleScannedQr(challengeUrl: string) {
     if (!scanAccount) return;
     setAccountQr(scanAccount.id, challengeUrl);
+    setQrDialogError(null);
+    setQrDialogAccount(null);
     setQrReview({
       accountId: scanAccount.id,
       accountName: scanAccount.accountName,
@@ -543,60 +492,59 @@ export function AccountsPanel({
         </Alert>
       ) : null}
 
-      <div className="grid gap-3">
+      <div className="grid items-start gap-4 xl:grid-cols-2">
         {accounts.map((account) => (
-          <Card key={account.id} className="bg-card/95">
-            <CardHeader className="gap-2">
+          <Card key={account.id} className="gap-4">
+            <CardHeader className="gap-1">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <CardTitle className="truncate">
+                  <CardTitle className="truncate text-lg">
                     {account.accountName}
                   </CardTitle>
-                  <CardDescription>
+                  <CardDescription className="font-mono text-xs">
                     {account.steamId || "Steam ID unavailable"}
                   </CardDescription>
                 </div>
                 <Badge
-                  variant={
-                    account.status === "active" ? "default" : "secondary"
-                  }
+                  variant="outline"
+                  className={cn(
+                    "gap-1.5",
+                    account.status === "active"
+                      ? "border-guard/30 text-guard"
+                      : "text-muted-foreground",
+                  )}
                 >
+                  <span
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      account.status === "active"
+                        ? "bg-guard"
+                        : "bg-muted-foreground",
+                    )}
+                  />
                   {account.status}
                 </Badge>
               </div>
             </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <div className="rounded-lg border bg-background px-4 py-3">
-                <p className="text-xs font-medium text-muted-foreground">
-                  Steam Guard code
-                </p>
-                <p className="code-digits mt-1 text-xl font-semibold">
-                  {codes[account.id] || "-----"}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
+            <CardContent className="flex flex-col gap-3">
+              <LiveCode accountId={account.id} />
+              <div className="flex flex-wrap gap-1.5">
                 <Button
                   type="button"
-                  variant="secondary"
-                  onClick={() => void loadCode(account.id)}
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => void listLoginSessions(account)}
                 >
-                  <KeyRoundIcon />
-                  Code
+                  <ActivityIcon />
+                  Logins
                 </Button>
                 {role === "admin" ? (
                   <Button
                     type="button"
-                    variant="outline"
-                    onClick={() => setExportAccount(account)}
-                  >
-                    <DownloadIcon />
-                    Export
-                  </Button>
-                ) : null}
-                {role === "admin" ? (
-                  <Button
-                    type="button"
-                    variant="outline"
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
                     onClick={() => void listConfirmations(account)}
                   >
                     <ListChecksIcon />
@@ -605,61 +553,118 @@ export function AccountsPanel({
                 ) : null}
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={() => void listLoginSessions(account)}
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    setQrDialogError(null);
+                    setQrDialogAccount(account);
+                  }}
                 >
-                  <ActivityIcon />
-                  Logins
+                  <QrCodeIcon />
+                  Approve QR
                 </Button>
-              </div>
-              <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
-                <div>
-                  <p className="text-sm font-medium">QR login approval</p>
-                  <p className="text-xs text-muted-foreground">
-                    Scan or paste a Steam QR URL, then review before accepting
-                    or denying.
-                  </p>
-                </div>
-                <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-                  <Input
-                    placeholder="https://s.team/q/..."
-                    value={qrChallenges[account.id] || ""}
-                    onChange={(event) =>
-                      setAccountQr(account.id, event.target.value)
-                    }
-                  />
+                {role === "admin" ? (
                   <Button
                     type="button"
-                    variant="outline"
-                    disabled={!qrChallenges[account.id]?.trim()}
-                    onClick={() =>
-                      reviewQr(account, qrChallenges[account.id] || "")
-                    }
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto text-muted-foreground hover:text-destructive"
+                    onClick={() => setExportAccount(account)}
                   >
-                    <QrCodeIcon />
-                    Review
+                    <DownloadIcon />
+                    Export
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setScanAccount(account)}
-                  >
-                    <CameraIcon />
-                    Scan QR
-                  </Button>
-                </div>
+                ) : null}
               </div>
             </CardContent>
           </Card>
         ))}
         {accounts.length === 0 ? (
-          <Card>
-            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              No accounts visible.
+          <Card className="xl:col-span-2">
+            <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+              <div className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                <ShieldIcon className="size-6" />
+              </div>
+              <div>
+                <p className="font-medium">No accounts yet</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {role === "admin"
+                    ? "Import a maFile or run Steam setup to add your first authenticator."
+                    : "An admin has not assigned any accounts to you yet."}
+                </p>
+              </div>
             </CardContent>
           </Card>
         ) : null}
       </div>
+
+      <Dialog
+        open={Boolean(qrDialogAccount)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setQrDialogAccount(null);
+            setQrDialogError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve a QR login</DialogTitle>
+            <DialogDescription>
+              {qrDialogAccount?.accountName} — scan the QR code on the Steam
+              login screen or paste its URL, then review the request before
+              accepting.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <Input
+              placeholder="https://s.team/q/..."
+              value={
+                qrDialogAccount ? qrChallenges[qrDialogAccount.id] || "" : ""
+              }
+              onChange={(event) => {
+                if (qrDialogAccount)
+                  setAccountQr(qrDialogAccount.id, event.target.value);
+              }}
+            />
+            {qrDialogError ? (
+              <p className="text-sm text-destructive">{qrDialogError}</p>
+            ) : null}
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1"
+                onClick={() =>
+                  qrDialogAccount && setScanAccount(qrDialogAccount)
+                }
+              >
+                <CameraIcon />
+                Scan QR
+              </Button>
+              <Button
+                type="button"
+                className="flex-1"
+                disabled={
+                  !qrDialogAccount ||
+                  !qrChallenges[qrDialogAccount.id]?.trim()
+                }
+                onClick={() =>
+                  qrDialogAccount &&
+                  reviewQr(
+                    qrDialogAccount,
+                    qrChallenges[qrDialogAccount.id] || "",
+                  )
+                }
+              >
+                <QrCodeIcon />
+                Review login
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {loginSessionsPanel ? (
         <Card>

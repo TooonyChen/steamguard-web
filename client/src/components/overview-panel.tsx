@@ -24,14 +24,14 @@ function StatCard({
     <Card className="bg-card/95">
       <CardHeader>
         <CardDescription>{title}</CardDescription>
-        <CardTitle className="text-2xl">{value}</CardTitle>
+        <CardTitle className="font-heading text-2xl tracking-tight">{value}</CardTitle>
         <CardAction>
           <div
             className={
               tone === "warning"
                 ? "rounded-md bg-destructive/10 p-2 text-destructive"
                 : tone === "good"
-                  ? "rounded-md bg-primary/10 p-2 text-primary"
+                  ? "rounded-md border border-guard/25 bg-guard/10 p-2 text-guard"
                   : "rounded-md bg-muted p-2 text-muted-foreground"
             }
           >

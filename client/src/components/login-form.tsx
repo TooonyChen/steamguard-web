@@ -39,12 +39,12 @@ export function LoginForm({
 }) {
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card className="border-foreground/10 bg-card/95 shadow-xl shadow-foreground/5">
+      <Card className="border-foreground/10 bg-card/95 shadow-xl shadow-black/20">
         <CardHeader>
-          <div className="mb-2 flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+          <div className="mb-2 flex size-11 items-center justify-center rounded-xl border border-guard/25 bg-guard/10 text-guard">
             <ShieldCheckIcon className="size-5" />
           </div>
-          <CardTitle>SteamGuard Web</CardTitle>
+          <CardTitle className="text-xl">SteamGuard Web</CardTitle>
           <CardDescription>
             Sign in to manage Steam Guard codes and mobile confirmations.
           </CardDescription>

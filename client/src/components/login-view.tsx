@@ -24,8 +24,12 @@ export function LoginView({ onLogin }: { onLogin: () => Promise<void> }) {
   }
 
   return (
-    <main className="grid min-h-svh place-items-center p-6 md:p-10">
-      <div className="w-full max-w-sm">
+    <main className="relative grid min-h-svh place-items-center overflow-hidden p-6 md:p-10">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_50%_38%,--alpha(var(--color-guard)/9%),transparent)]"
+      />
+      <div className="relative w-full max-w-sm">
         <LoginForm
           username={username}
           password={password}

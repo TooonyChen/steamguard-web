@@ -89,13 +89,15 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="h-auto py-3">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <div className="flex size-9 items-center justify-center rounded-lg border border-guard/25 bg-guard/10 text-guard">
                 <FileKey2Icon className="size-5" />
               </div>
               <div className="grid flex-1 text-left leading-tight">
-                <span className="truncate font-medium">SteamGuard Web</span>
+                <span className="font-heading truncate font-semibold tracking-tight">
+                  SteamGuard Web
+                </span>
                 <span className="truncate text-xs text-muted-foreground">
-                  Self-hosted control plane
+                  Self-hosted vault
                 </span>
               </div>
             </SidebarMenuButton>
