@@ -2,6 +2,16 @@ export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code: string,
+  ) {
+    super(message)
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body && !headers.has("content-type") && !(init.body instanceof FormData)) {
@@ -15,7 +25,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const payload = (await response.json()) as ApiResult<T>
   if (!response.ok || !payload.ok) {
-    throw new Error(payload.ok ? `${response.status} ${response.statusText}` : payload.error.message)
+    if (payload.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status, "error")
+    throw new ApiError(payload.error.message, response.status, payload.error.code)
   }
   return payload.data
 }
