@@ -90,6 +90,8 @@ All Steam-facing logic is here. The split mirrors the upstream Rust `steamguard/
 - Vite + React 19, `root: 'client'`, output `dist/client`. Path alias `@/` → `client/src/`.
 - `client/src/api.ts` is the only place the SPA calls the Worker API; envelope shape is `{ ok, data | error }`.
 - shadcn/ui components live under `client/src/components/ui/`; feature panels are the siblings (`accounts-panel.tsx`, `steam-flows-panel.tsx`, `admin-users-panel.tsx`, etc.).
+- App shell: `app-nav.tsx` holds the md+ sidebar and the phone bottom tab bar (secondary sections sit in its "More" sheet). Each page starts with `PageHeader` (`page-header.tsx`); there is no separate site header. Codes (`accounts-panel.tsx`) is the home page.
+- Admin Steam sign-in statuses are loaded once in `App` via `useSigninStatuses` (`client/src/hooks/`) and shared by the nav badge, the Codes page warnings and the Sign-ins page.
 - Two routes the UI must keep prominent: red-banner warning on the Full `.maFile` download button, and an explicit "must change password" gate after first login.
 
 ### Database
