@@ -21,6 +21,46 @@ A web port of Steam Guard that runs as a single Cloudflare Worker with a built-i
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/codes.png" alt="Codes page: live Steam Guard codes with each account's Steam avatar" width="900"/>
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/codes-phone.png" alt="Codes page on a phone (admin)" width="300"/><br/>
+      <sub>Admin on a phone</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/viewer-phone.png" alt="Codes page on a phone (viewer)" width="300"/><br/>
+      <sub>A viewer only sees the accounts assigned to them</sub>
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/signins.png" alt="Sign-ins page: Steam mobile session status per account"/><br/>
+      <sub>Sign-ins: Steam session status per account</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/users.png" alt="Users page: viewers and their assigned accounts"/><br/>
+      <sub>Users: viewers and their assigned accounts</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/audit.png" alt="Audit log"/><br/>
+      <sub>Audit log</sub>
+    </td>
+  </tr>
+</table>
+
+<sub>Screenshots use demo data: the account names, Steam IDs and avatars are made up.</sub>
+
+---
+
 ## Architecture in 30 seconds
 
 ```
