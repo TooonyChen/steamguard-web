@@ -153,11 +153,33 @@ function avatarTone(account: Account) {
 
 function AccountAvatar({ account }: { account: Account }) {
   const disabled = account.status !== "active";
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const avatarUrl =
+    account.avatarUrl && account.avatarUrl !== failedUrl ? account.avatarUrl : null;
+  const box = "size-9 shrink-0 rounded-[10px] md:size-10";
+
+  if (avatarUrl) {
+    return (
+      <img
+        aria-hidden
+        alt=""
+        src={avatarUrl}
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        draggable={false}
+        onError={() => setFailedUrl(avatarUrl)}
+        className={cn(box, "bg-secondary object-cover", disabled && "opacity-50 grayscale")}
+      />
+    );
+  }
+
   return (
     <div
       aria-hidden
       className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-[10px] font-semibold md:size-10",
+        box,
+        "flex items-center justify-center font-semibold",
         disabled ? "bg-secondary text-subtle" : avatarTone(account),
       )}
     >

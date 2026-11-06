@@ -9,6 +9,7 @@ import { createSession, revokeSession, authMiddleware, currentFreshUser } from '
 import { assertLoginAllowed, clearLoginFailures, recordLoginFailure } from '../auth/throttle'
 import { createUser, activeAdminCount, findUserById, findUserByUsername, listAccountsForUser, toAuthUser } from '../db/queries'
 import { createEncryptedAccount, decryptAccountSecret, grantAccountToUser, revokeAccountFromUser, saveAccountSecret } from '../db/accounts'
+import { fillMissingAvatars } from '../db/avatars'
 import { loadAccountKeyForUser } from '../vault/vault'
 import { hashPassword, nowIso, verifyPassword } from '../crypto/webcrypto'
 import { jsonError, badRequest, forbidden, notFound, conflict } from './errors'
@@ -35,6 +36,7 @@ import { parseSteamQrChallenge } from '../steam/qr-login'
 import { removeAuthenticator } from '../steam/twofactor-client'
 import { ensureMobileAccessToken } from '../steam/session-tokens'
 import { steamLoginStatus } from '../steam/login-status'
+import { steamAvatarUrl } from '../steam/profile'
 import { SteamApiError } from '../steam/webapi-transport'
 import { EResult } from '../steam/eresult'
 
@@ -402,7 +404,7 @@ export function createApp() {
     if (!target) notFound('User not found')
     const { results = [] } = await c.env.DB
       .prepare(
-        `SELECT a.id, a.account_name, a.steam_id, a.status, p.can_view_code, p.can_view_status
+        `SELECT a.id, a.account_name, a.steam_id, a.status, a.avatar_hash, p.can_view_code, p.can_view_status
          FROM account_permissions p
          INNER JOIN steam_accounts a ON a.id = p.account_id
          WHERE p.user_id = ?
@@ -414,6 +416,7 @@ export function createApp() {
         account_name: string
         steam_id: string | null
         status: string
+        avatar_hash: string | null
         can_view_code: number
         can_view_status: number
       }>()
@@ -422,6 +425,7 @@ export function createApp() {
         id: row.id,
         accountName: row.account_name,
         steamId: row.steam_id,
+        avatarUrl: steamAvatarUrl(row.avatar_hash),
         status: row.status,
         canViewCode: Boolean(row.can_view_code),
         canViewStatus: Boolean(row.can_view_status),
@@ -473,11 +477,13 @@ export function createApp() {
 
   app.get('/api/accounts', authMiddleware, async (c) => {
     const accounts = await listAccountsForUser(c.env, c.get('user'))
+    await fillMissingAvatars(c.env, accounts)
     return c.json(jsonOk({
       accounts: accounts.map((account) => ({
         id: account.id,
         accountName: account.account_name,
         steamId: account.steam_id,
+        avatarUrl: steamAvatarUrl(account.avatar_hash),
         status: account.status,
         createdAt: account.created_at,
         updatedAt: account.updated_at,
@@ -511,6 +517,7 @@ export function createApp() {
       account_name: string
       steam_id: string | null
       status: string
+      avatar_hash: string | null
       created_at: string
       updated_at: string
     }>()
@@ -520,6 +527,7 @@ export function createApp() {
         id: account.id,
         accountName: account.account_name,
         steamId: account.steam_id,
+        avatarUrl: steamAvatarUrl(account.avatar_hash),
         status: account.status,
         createdAt: account.created_at,
         updatedAt: account.updated_at,
@@ -720,8 +728,16 @@ export function createApp() {
     account.tokens = next.tokens
     await saveAccountSecret(c.env, accountId, accountKey, account)
     await c.env.DB
-      .prepare('UPDATE steam_accounts SET steam_id = ?, updated_at = ? WHERE id = ?')
-      .bind(next.steamId, nowIso(), accountId)
+      .prepare(
+        // A different Steam ID means a different profile, so drop the cached avatar
+        // and let the next account list look it up again.
+        `UPDATE steam_accounts SET
+           avatar_hash = CASE WHEN steam_id = ? THEN avatar_hash ELSE NULL END,
+           avatar_checked_at = CASE WHEN steam_id = ? THEN avatar_checked_at ELSE NULL END,
+           steam_id = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .bind(next.steamId, next.steamId, next.steamId, nowIso(), accountId)
       .run()
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'completed')
     await audit(c.env, {
