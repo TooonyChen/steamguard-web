@@ -2,94 +2,96 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
-@import "@fontsource-variable/space-grotesk";
-@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/geist-mono";
 
 @custom-variant dark (&:is(.dark *));
 
 /*
- * SteamGuard Web palette — grounded in Steam's own livery:
- * deep client navy for surfaces, Steam Guard ice-blue (#66c0f4)
- * as the single accent, ember amber for expiring codes.
+ * SteamGuard Web palette, from the Claude Design canvas:
+ * Steam navy surfaces, Steam Guard ice-blue (#66c0f4) as the one accent,
+ * amber for "expiring / needs attention", soft red for destructive.
+ * Borders stay faint; surfaces are separated by lightness instead.
  * Dark is the default theme (html.dark); light stays defined below.
  */
 :root {
-  --background: oklch(0.97 0.005 240);
-  --foreground: oklch(0.24 0.025 255);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.24 0.025 255);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.24 0.025 255);
-  --primary: oklch(0.52 0.11 240);
-  --primary-foreground: oklch(0.98 0.005 240);
-  --secondary: oklch(0.93 0.012 240);
-  --secondary-foreground: oklch(0.3 0.03 250);
-  --muted: oklch(0.94 0.01 240);
-  --muted-foreground: oklch(0.5 0.02 250);
-  --accent: oklch(0.92 0.02 235);
-  --accent-foreground: oklch(0.3 0.04 245);
-  --destructive: oklch(0.577 0.245 27.325);
-  --warning: oklch(0.62 0.14 70);
-  --guard: oklch(0.52 0.11 240);
-  --border: oklch(0.88 0.012 240);
-  --input: oklch(0.88 0.012 240);
-  --ring: oklch(0.62 0.09 238);
-  --chart-1: oklch(0.78 0.1 232);
-  --chart-2: oklch(0.62 0.09 238);
-  --chart-3: oklch(0.52 0.11 240);
-  --chart-4: oklch(0.42 0.08 245);
-  --chart-5: oklch(0.32 0.05 250);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.94 0.008 240);
-  --sidebar-foreground: oklch(0.24 0.025 255);
-  --sidebar-primary: oklch(0.52 0.11 240);
-  --sidebar-primary-foreground: oklch(0.98 0.005 240);
-  --sidebar-accent: oklch(0.9 0.015 238);
-  --sidebar-accent-foreground: oklch(0.24 0.025 255);
-  --sidebar-border: oklch(0.88 0.012 240);
-  --sidebar-ring: oklch(0.62 0.09 238);
+  --background: #f4f6f9;
+  --foreground: #16202b;
+  --card: #ffffff;
+  --card-foreground: #16202b;
+  --popover: #ffffff;
+  --popover-foreground: #16202b;
+  --primary: #1a6fa3;
+  --primary-foreground: #ffffff;
+  --secondary: #e8edf2;
+  --secondary-foreground: #16202b;
+  --muted: #e8edf2;
+  --muted-foreground: #4f5d6b;
+  --subtle: #5f6d7b;
+  --accent: #e3edf5;
+  --accent-foreground: #16202b;
+  --destructive: #c4383c;
+  --warning: #9a5b00;
+  --guard: #1a6fa3;
+  --border: rgb(22 32 43 / 10%);
+  --input: rgb(22 32 43 / 14%);
+  --ring: #1a6fa3;
+  --chart-1: #66c0f4;
+  --chart-2: #3f9bd1;
+  --chart-3: #1a6fa3;
+  --chart-4: #12507a;
+  --chart-5: #0b3552;
+  --radius: 0.75rem;
+  --sidebar: #eaeef3;
+  --sidebar-foreground: #16202b;
+  --sidebar-primary: #1a6fa3;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgb(26 111 163 / 12%);
+  --sidebar-accent-foreground: #16202b;
+  --sidebar-border: rgb(22 32 43 / 8%);
+  --sidebar-ring: #1a6fa3;
 }
 
 .dark {
-  --background: oklch(0.19 0.02 255);
-  --foreground: oklch(0.93 0.008 240);
-  --card: oklch(0.225 0.024 253);
-  --card-foreground: oklch(0.93 0.008 240);
-  --popover: oklch(0.245 0.026 252);
-  --popover-foreground: oklch(0.93 0.008 240);
-  --primary: oklch(0.78 0.1 232);
-  --primary-foreground: oklch(0.17 0.03 252);
-  --secondary: oklch(0.3 0.03 250);
-  --secondary-foreground: oklch(0.93 0.008 240);
-  --muted: oklch(0.27 0.025 250);
-  --muted-foreground: oklch(0.68 0.02 245);
-  --accent: oklch(0.3 0.035 245);
-  --accent-foreground: oklch(0.95 0.01 240);
-  --destructive: oklch(0.66 0.19 25);
-  --warning: oklch(0.76 0.14 70);
-  --guard: oklch(0.82 0.1 230);
-  --border: oklch(0.93 0.02 240 / 10%);
-  --input: oklch(0.93 0.02 240 / 14%);
-  --ring: oklch(0.65 0.08 235);
-  --chart-1: oklch(0.82 0.1 230);
-  --chart-2: oklch(0.7 0.09 235);
-  --chart-3: oklch(0.58 0.08 240);
-  --chart-4: oklch(0.46 0.06 245);
-  --chart-5: oklch(0.36 0.04 250);
-  --sidebar: oklch(0.165 0.018 255);
-  --sidebar-foreground: oklch(0.9 0.01 240);
-  --sidebar-primary: oklch(0.78 0.1 232);
-  --sidebar-primary-foreground: oklch(0.17 0.03 252);
-  --sidebar-accent: oklch(0.245 0.028 250);
-  --sidebar-accent-foreground: oklch(0.95 0.01 240);
-  --sidebar-border: oklch(0.93 0.02 240 / 8%);
-  --sidebar-ring: oklch(0.65 0.08 235);
+  --background: #0f141b;
+  --foreground: #e6edf3;
+  --card: #151c25;
+  --card-foreground: #e6edf3;
+  --popover: #18202a;
+  --popover-foreground: #e6edf3;
+  --primary: #66c0f4;
+  --primary-foreground: #08131c;
+  --secondary: #1b2430;
+  --secondary-foreground: #e6edf3;
+  --muted: #1b2430;
+  --muted-foreground: #9aa7b4;
+  --subtle: #7d8a97;
+  --accent: #1f2a37;
+  --accent-foreground: #e6edf3;
+  --destructive: #f2777a;
+  --warning: #f0b45a;
+  --guard: #66c0f4;
+  --border: rgb(230 237 243 / 7%);
+  --input: rgb(230 237 243 / 10%);
+  --ring: #66c0f4;
+  --chart-1: #66c0f4;
+  --chart-2: #4fa6d8;
+  --chart-3: #3a87b6;
+  --chart-4: #2a6890;
+  --chart-5: #1f4c6a;
+  --sidebar: #0b1016;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-primary: #66c0f4;
+  --sidebar-primary-foreground: #08131c;
+  --sidebar-accent: rgb(102 192 244 / 12%);
+  --sidebar-accent-foreground: #e6edf3;
+  --sidebar-border: rgb(230 237 243 / 6%);
+  --sidebar-ring: #66c0f4;
 }
 
 @theme inline {
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Space Grotesk Variable", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+  --font-heading: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -112,6 +114,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
+  --color-subtle: var(--subtle);
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
@@ -163,7 +166,8 @@
   [data-slot="dialog-title"],
   [data-slot="alert-dialog-title"] {
     font-family: var(--font-heading);
-    letter-spacing: -0.01em;
+    font-weight: 600;
+    letter-spacing: -0.015em;
   }
 
   button,
@@ -178,7 +182,16 @@
   .code-digits {
     font-family: var(--font-mono);
     font-weight: 600;
-    letter-spacing: 0.22em;
+    letter-spacing: 0.16em;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Bottom padding that clears the phone tab bar and the home indicator. */
+  .pb-tabbar {
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  }
+
+  .pb-safe {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
   }
 }

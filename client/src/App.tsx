@@ -3,24 +3,24 @@ import { useEffect, useState } from "react"
 import { api } from "@/api"
 import { AccountsPanel } from "@/components/accounts-panel"
 import { AdminUsersPanel } from "@/components/admin-users-panel"
-import { AppSidebar, type AppSection } from "@/components/app-sidebar"
+import { DesktopSidebar, MobileTabBar, sectionsFor, type AppSection } from "@/components/app-nav"
 import { AuditPanel } from "@/components/audit-panel"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { LoginStatusPanel } from "@/components/login-status-panel"
 import { LoginView } from "@/components/login-view"
-import { OverviewPanel } from "@/components/overview-panel"
-import { SettingsPanel } from "@/components/settings-panel"
-import { SiteHeader } from "@/components/site-header"
+import { PasswordChangeGate, SettingsPanel } from "@/components/settings-panel"
 import { SteamFlowsPanel } from "@/components/steam-flows-panel"
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { useSigninStatuses } from "@/hooks/use-signin-statuses"
 import type { Account, User } from "@/types"
 
 export function App() {
   const [user, setUser] = useState<User | null>(null)
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [activeSection, setActiveSection] = useState<AppSection>("overview")
+  const [activeSection, setActiveSection] = useState<AppSection>("codes")
   const [loading, setLoading] = useState(true)
+  const isAdmin = user?.role === "admin" && !user.mustChangePassword
+  const signins = useSigninStatuses(accounts, isAdmin)
 
   async function refreshMe() {
     const data = await api<{ user: User }>("/api/auth/me")
@@ -44,16 +44,21 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (user?.role === "viewer" && !["overview", "accounts", "settings"].includes(activeSection)) {
-      setActiveSection("overview")
+    if (user && !sectionsFor(user.role).includes(activeSection)) {
+      setActiveSection("codes")
     }
-  }, [activeSection, user?.role])
+  }, [activeSection, user])
+
+  function navigate(section: AppSection) {
+    setActiveSection(section)
+    window.scrollTo({ top: 0 })
+  }
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" })
     setUser(null)
     setAccounts([])
-    setActiveSection("overview")
+    setActiveSection("codes")
   }
 
   if (loading) {
@@ -66,53 +71,51 @@ export function App() {
 
   if (!user) return <LoginView onLogin={refreshAll} />
 
+  if (user.mustChangePassword) {
+    return <PasswordChangeGate user={user} onDone={refreshAll} onLogout={() => void logout()} />
+  }
+
+  const navProps = {
+    user,
+    activeSection,
+    accountCount: accounts.length,
+    signinAttention: signins.attention,
+    onNavigate: navigate,
+    onLogout: () => void logout(),
+  }
+
   return (
     <ErrorBoundary>
-    <TooltipProvider>
-      <SidebarProvider
-        style={
-          {
-            "--sidebar-width": "18rem",
-            "--header-height": "4.5rem",
-          } as React.CSSProperties
-        }
-      >
-        <AppSidebar
-          variant="inset"
-          user={user}
-          activeSection={activeSection}
-          accountCount={accounts.length}
-          onNavigate={setActiveSection}
-          onLogout={() => void logout()}
-        />
-        <SidebarInset>
-          <SiteHeader activeSection={activeSection} />
-          <div className="@container/main flex flex-1 flex-col">
-            <div className="flex flex-col gap-4 p-4 md:gap-6 md:p-6">
-              {activeSection === "overview" ? <OverviewPanel user={user} accounts={accounts} /> : null}
-              {activeSection === "accounts" ? (
-                <AccountsPanel accounts={accounts} role={user.role} onRefresh={refreshAccounts} />
-              ) : null}
-              {activeSection === "login-status" && user.role === "admin" ? (
-                <LoginStatusPanel accounts={accounts} onRefresh={refreshAccounts} />
-              ) : null}
-              {activeSection === "steam" && user.role === "admin" ? (
-                <SteamFlowsPanel onComplete={refreshAccounts} />
-              ) : null}
-              {activeSection === "users" && user.role === "admin" ? (
-                <AdminUsersPanel
+      <TooltipProvider>
+        <div className="flex min-h-svh">
+          <DesktopSidebar {...navProps} />
+          <main className="pb-tabbar min-w-0 flex-1 px-4 pt-5 md:px-10 md:pt-8 md:pb-12">
+            <div className="mx-auto flex max-w-[960px] flex-col gap-5 md:gap-6">
+              {activeSection === "codes" ? (
+                <AccountsPanel
                   accounts={accounts}
-                  currentUserId={user.id}
-                  onRefresh={refreshAll}
+                  role={user.role}
+                  signinStatuses={signins.statuses}
+                  onRefresh={refreshAccounts}
+                  onOpenSignins={() => navigate("signins")}
                 />
               ) : null}
-              {activeSection === "audit" && user.role === "admin" ? <AuditPanel /> : null}
+              {activeSection === "signins" && isAdmin ? (
+                <LoginStatusPanel accounts={accounts} signins={signins} onRefresh={refreshAccounts} />
+              ) : null}
+              {activeSection === "setup" && isAdmin ? (
+                <SteamFlowsPanel onComplete={refreshAccounts} />
+              ) : null}
+              {activeSection === "users" && isAdmin ? (
+                <AdminUsersPanel accounts={accounts} currentUserId={user.id} onRefresh={refreshAll} />
+              ) : null}
+              {activeSection === "audit" && isAdmin ? <AuditPanel accounts={accounts} /> : null}
               {activeSection === "settings" ? <SettingsPanel user={user} onDone={refreshMe} /> : null}
             </div>
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
-    </TooltipProvider>
+          </main>
+          <MobileTabBar {...navProps} />
+        </div>
+      </TooltipProvider>
     </ErrorBoundary>
   )
 }

@@ -1,30 +1,44 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIcon,
   AlertTriangleIcon,
   CameraIcon,
   CheckIcon,
+  ChevronRightIcon,
   DownloadIcon,
-  FileInputIcon,
   ListChecksIcon,
+  MoreHorizontalIcon,
   QrCodeIcon,
   RefreshCwIcon,
+  SearchIcon,
   ShieldIcon,
+  UploadIcon,
   XIcon,
 } from "lucide-react";
 
 import { api } from "@/api";
 import { cn } from "@/lib/utils";
 import { LiveCode } from "@/components/live-code";
+import { PageHeader } from "@/components/page-header";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { needsSignin } from "@/hooks/use-signin-statuses";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Dialog,
   DialogContent,
@@ -48,7 +62,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { QrLoginScannerDialog } from "@/components/qr-login-scanner-dialog";
-import type { Account, Role } from "@/types";
+import type { Account, Role, SteamLoginStatus } from "@/types";
 
 type SteamConfirmation = {
   type: number;
@@ -124,15 +138,194 @@ function isSteamQrChallenge(value: string): boolean {
   }
 }
 
+const AVATAR_TONES = [
+  "bg-guard/15 text-guard",
+  "bg-[#8b95f0]/15 text-[#aeb6f5]",
+  "bg-[#8fc47f]/15 text-[#a9d39b]",
+  "bg-[#e0a36a]/15 text-[#e8bb8f]",
+];
+
+function avatarTone(account: Account) {
+  let hash = 0;
+  for (const char of account.id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return AVATAR_TONES[hash % AVATAR_TONES.length];
+}
+
+function AccountAvatar({ account }: { account: Account }) {
+  const disabled = account.status !== "active";
+  return (
+    <div
+      aria-hidden
+      className={cn(
+        "flex size-9 shrink-0 items-center justify-center rounded-[10px] font-semibold md:size-10",
+        disabled ? "bg-secondary text-subtle" : avatarTone(account),
+      )}
+    >
+      {account.accountName.slice(0, 1).toUpperCase()}
+    </div>
+  );
+}
+
+type AccountAction = "qr" | "logins" | "confirmations" | "export";
+
+/** The row's "More" menu: a dropdown on desktop, a bottom sheet on phones. */
+function AccountActionsMenu({
+  account,
+  role,
+  isMobile,
+  onAction,
+}: {
+  account: Account;
+  role: Role;
+  isMobile: boolean;
+  onAction: (action: AccountAction) => void;
+}) {
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const trigger = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="text-muted-foreground"
+      aria-label={`Actions for ${account.accountName}`}
+      onClick={isMobile ? () => setSheetOpen(true) : undefined}
+    >
+      <MoreHorizontalIcon />
+    </Button>
+  );
+
+  if (!isMobile) {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64 p-1.5">
+          <DropdownMenuItem className="h-9" onSelect={() => onAction("qr")}>
+            <QrCodeIcon />
+            Scan QR to sign in
+          </DropdownMenuItem>
+          <DropdownMenuItem className="h-9" onSelect={() => onAction("logins")}>
+            <ActivityIcon />
+            Login requests
+          </DropdownMenuItem>
+          {role === "admin" ? (
+            <>
+              <DropdownMenuItem className="h-9" onSelect={() => onAction("confirmations")}>
+                <ListChecksIcon />
+                Trade and market confirmations
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                className="h-9"
+                onSelect={() => onAction("export")}
+              >
+                <DownloadIcon />
+                Export full .maFile
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  function pick(action: AccountAction) {
+    setSheetOpen(false);
+    onAction(action);
+  }
+
+  const rowClass =
+    "flex min-h-14 w-full items-center gap-3.5 px-4 text-left text-[15px]";
+  return (
+    <>
+      {trigger}
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          className="pb-safe gap-4 rounded-t-[22px] border-0 bg-card px-4 pt-2.5"
+        >
+          <div aria-hidden className="mx-auto h-[5px] w-9 rounded-full bg-muted" />
+          <SheetHeader className="flex-row items-center gap-3 p-0 px-1">
+            <AccountAvatar account={account} />
+            <div className="min-w-0">
+              <SheetTitle className="truncate text-[17px]">{account.accountName}</SheetTitle>
+              <SheetDescription className="font-mono text-xs">
+                {account.steamId || "Steam ID unknown"}
+              </SheetDescription>
+            </div>
+          </SheetHeader>
+          <div className="flex flex-col overflow-hidden rounded-2xl bg-secondary">
+            <button type="button" className={rowClass} onClick={() => pick("qr")}>
+              <QrCodeIcon className="size-5 text-guard" />
+              <span className="flex-1">Scan QR to sign in</span>
+              <ChevronRightIcon className="size-4 text-subtle" />
+            </button>
+            <button type="button" className={cn(rowClass, "border-t")} onClick={() => pick("logins")}>
+              <ActivityIcon className="size-5 text-guard" />
+              <span className="flex-1">Login requests</span>
+              <ChevronRightIcon className="size-4 text-subtle" />
+            </button>
+            {role === "admin" ? (
+              <button
+                type="button"
+                className={cn(rowClass, "border-t")}
+                onClick={() => pick("confirmations")}
+              >
+                <ListChecksIcon className="size-5 text-guard" />
+                <span className="flex-1">Trade and market confirmations</span>
+                <ChevronRightIcon className="size-4 text-subtle" />
+              </button>
+            ) : null}
+          </div>
+          {role === "admin" ? (
+            <button
+              type="button"
+              onClick={() => pick("export")}
+              className="flex items-start gap-3.5 rounded-2xl bg-secondary px-4 py-3.5 text-left text-destructive"
+            >
+              <DownloadIcon className="mt-0.5 size-5 shrink-0" />
+              <span className="flex flex-col gap-0.5">
+                <span className="text-[15px] font-medium">Export full .maFile</span>
+                <span className="text-[13px] leading-[18px] text-destructive/80">
+                  Plaintext secrets, including the revocation code. Anyone with this file
+                  controls the account.
+                </span>
+              </span>
+            </button>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            size="lg"
+            className="mb-2 rounded-2xl"
+            onClick={() => setSheetOpen(false)}
+          >
+            Close
+          </Button>
+        </SheetContent>
+      </Sheet>
+    </>
+  );
+}
+
 export function AccountsPanel({
   accounts,
   role,
+  signinStatuses,
   onRefresh,
+  onOpenSignins,
 }: {
   accounts: Account[];
   role: Role;
+  /** Stored Steam sign-in status per account; admins only (empty for viewers). */
+  signinStatuses: Record<string, SteamLoginStatus>;
   onRefresh: () => Promise<void>;
+  onOpenSignins: () => void;
 }) {
+  const isMobile = useIsMobile();
+  const [filter, setFilter] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<MessageState | null>(null);
   const [qrChallenges, setQrChallenges] = useState<Record<string, string>>({});
   const [exportAccount, setExportAccount] = useState<Account | null>(null);
@@ -429,35 +622,100 @@ export function AccountsPanel({
 
   const pageMessage = confirmationsPanel || loginSessionsPanel ? null : message;
 
+  const visibleAccounts = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    if (!query) return accounts;
+    return accounts.filter(
+      (account) =>
+        account.accountName.toLowerCase().includes(query) ||
+        (account.steamId ?? "").includes(query),
+    );
+  }, [accounts, filter]);
+
+  const activeCount = accounts.filter((account) => account.status === "active").length;
+  const signinAttention = accounts.filter((account) =>
+    needsSignin(signinStatuses[account.id]?.state),
+  ).length;
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  function openQrDialog(account: Account) {
+    setQrDialogError(null);
+    setQrDialogAccount(account);
+  }
+
+  function runAction(account: Account, action: AccountAction) {
+    if (action === "qr") openQrDialog(account);
+    if (action === "logins") void listLoginSessions(account);
+    if (action === "confirmations") void listConfirmations(account);
+    if (action === "export") setExportAccount(account);
+  }
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-medium">Accounts</h2>
-          <p className="text-sm text-muted-foreground">
-            {role === "admin"
-              ? "Manage imported authenticators."
-              : "View assigned Steam Guard codes and handle login approvals."}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void onRefresh()}
-          >
-            <RefreshCwIcon />
-            Refresh
-          </Button>
-          {role === "admin" ? (
-            <Dialog open={importOpen} onOpenChange={setImportOpen}>
-              <DialogTrigger asChild>
-                <Button type="button">
-                  <FileInputIcon />
-                  Import maFile
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
+    <div className="flex flex-col gap-5 md:gap-6">
+      <PageHeader
+        title="Codes"
+        description={
+          accounts.length === 0 ? undefined : (
+            <>
+              {accounts.length} account{accounts.length === 1 ? "" : "s"} · {activeCount} active
+              {signinAttention > 0 ? (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={onOpenSignins}
+                    className="text-warning hover:underline"
+                  >
+                    {signinAttention} need{signinAttention === 1 ? "s" : ""} sign-in
+                  </button>
+                </>
+              ) : null}
+            </>
+          )
+        }
+        actions={
+          <>
+            {accounts.length > 0 ? (
+              <label className="relative hidden md:block">
+                <span className="sr-only">Filter accounts</span>
+                <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-subtle" />
+                <Input
+                  type="search"
+                  placeholder="Filter accounts"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value)}
+                  className="w-56 pl-9 md:pl-9"
+                />
+              </label>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Refresh accounts"
+              disabled={refreshing}
+              onClick={() => void refresh()}
+              className="hidden md:inline-flex"
+            >
+              <RefreshCwIcon className={cn(refreshing && "animate-spin")} />
+            </Button>
+            {role === "admin" ? (
+              <Dialog open={importOpen} onOpenChange={setImportOpen}>
+                <DialogTrigger asChild>
+                  <Button type="button" aria-label="Import maFile" className="max-md:size-11 max-md:rounded-xl max-md:p-0">
+                    <UploadIcon />
+                    <span className="hidden md:inline">Import maFile</span>
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Upload plaintext maFile</DialogTitle>
                   <DialogDescription>
@@ -506,10 +764,25 @@ export function AccountsPanel({
                   </DialogFooter>
                 </form>
               </DialogContent>
-            </Dialog>
-          ) : null}
-        </div>
-      </div>
+              </Dialog>
+            ) : null}
+          </>
+        }
+      />
+
+      {accounts.length > 0 ? (
+        <label className="relative md:hidden">
+          <span className="sr-only">Filter accounts</span>
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
+          <Input
+            type="search"
+            placeholder="Filter accounts"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            className="rounded-xl border-transparent pl-10"
+          />
+        </label>
+      ) : null}
 
       {pageMessage ? (
         <Alert
@@ -527,112 +800,108 @@ export function AccountsPanel({
         </Alert>
       ) : null}
 
-      <div className="grid items-start gap-4 xl:grid-cols-2">
-        {accounts.map((account) => (
-          <Card key={account.id} className="gap-4">
-            <CardHeader className="gap-1">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <CardTitle className="truncate text-lg">
-                    {account.accountName}
-                  </CardTitle>
-                  <CardDescription className="font-mono text-xs">
-                    {account.steamId || "Steam ID unavailable"}
-                  </CardDescription>
-                </div>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "gap-1.5",
-                    account.status === "active"
-                      ? "border-guard/30 text-guard"
-                      : "text-muted-foreground",
+      {accounts.length > 0 ? (
+        <section
+          aria-label="Accounts"
+          className="flex flex-col gap-2.5 md:gap-0 md:overflow-hidden md:rounded-[14px] md:border md:bg-card"
+        >
+          {visibleAccounts.map((account, index) => {
+            const disabled = account.status !== "active";
+            const signinMissing = needsSignin(signinStatuses[account.id]?.state);
+            return (
+              <div
+                key={account.id}
+                className={cn(
+                  "flex flex-wrap items-center gap-x-3 gap-y-3.5 rounded-2xl bg-card py-3 pr-3 pl-4 md:flex-nowrap md:gap-4 md:rounded-none md:bg-transparent md:px-5 md:py-4",
+                  index > 0 && "md:border-t",
+                )}
+              >
+                <AccountAvatar account={account} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "truncate font-medium md:text-[15px]",
+                        disabled && "text-muted-foreground",
+                      )}
+                    >
+                      {account.accountName}
+                    </span>
+                    {disabled ? (
+                      <span className="hidden shrink-0 rounded-full bg-secondary px-2 text-xs leading-[18px] text-muted-foreground md:inline">
+                        Disabled
+                      </span>
+                    ) : null}
+                  </div>
+                  {signinMissing ? (
+                    <button
+                      type="button"
+                      onClick={onOpenSignins}
+                      className="block max-w-full truncate text-left text-xs text-warning hover:underline"
+                    >
+                      {disabled ? <span className="md:hidden">Disabled · </span> : null}
+                      Not signed in
+                      <span className="hidden md:inline"> to Steam · Sign in</span>
+                    </button>
+                  ) : (
+                    <div className="truncate font-mono text-xs text-subtle">
+                      {disabled ? <span className="font-sans md:hidden">Disabled · </span> : null}
+                      {account.steamId || "Steam ID unknown"}
+                    </div>
                   )}
-                >
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      account.status === "active"
-                        ? "bg-guard"
-                        : "bg-muted-foreground",
-                    )}
+                </div>
+                <LiveCode accountId={account.id} accountName={account.accountName} />
+                <div className="flex shrink-0 items-center gap-0.5 max-md:-mr-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="hidden text-muted-foreground md:inline-flex"
+                    aria-label={`Approve QR login for ${account.accountName}`}
+                    onClick={() => openQrDialog(account)}
+                  >
+                    <QrCodeIcon className="size-[17px]" />
+                  </Button>
+                  <AccountActionsMenu
+                    account={account}
+                    role={role}
+                    isMobile={isMobile}
+                    onAction={(action) => runAction(account, action)}
                   />
-                  {account.status}
-                </Badge>
+                </div>
               </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <LiveCode accountId={account.id} />
-              <div className="flex flex-wrap gap-1.5">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={() => void listLoginSessions(account)}
-                >
-                  <ActivityIcon />
-                  Logins
-                </Button>
-                {role === "admin" ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => void listConfirmations(account)}
-                  >
-                    <ListChecksIcon />
-                    Confirmations
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={() => {
-                    setQrDialogError(null);
-                    setQrDialogAccount(account);
-                  }}
-                >
-                  <QrCodeIcon />
-                  Approve QR
-                </Button>
-                {role === "admin" ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="ml-auto text-muted-foreground hover:text-destructive"
-                    onClick={() => setExportAccount(account)}
-                  >
-                    <DownloadIcon />
-                    Export
-                  </Button>
-                ) : null}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-        {accounts.length === 0 ? (
-          <Card className="xl:col-span-2">
-            <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-              <div className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                <ShieldIcon className="size-6" />
-              </div>
-              <div>
-                <p className="font-medium">No accounts yet</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {role === "admin"
-                    ? "Import a maFile or run Steam setup to add your first authenticator."
-                    : "An admin has not assigned any accounts to you yet."}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-      </div>
+            );
+          })}
+          {visibleAccounts.length === 0 ? (
+            <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+              No account matches "{filter.trim()}".
+            </p>
+          ) : null}
+        </section>
+      ) : (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+            <div className="flex size-12 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+              <ShieldIcon className="size-6" />
+            </div>
+            <div>
+              <p className="font-medium">No accounts yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {role === "admin"
+                  ? "Import a maFile or run Steam setup to add your first authenticator."
+                  : "An admin has not assigned any accounts to you yet."}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {accounts.length > 0 ? (
+        <p className="text-[13px] text-subtle">
+          {isMobile ? "Tap" : "Click"} a code to copy it. Codes refresh every 30 seconds while
+          shown, and every view is written to the audit log.
+        </p>
+      ) : null}
 
       <Dialog
         open={Boolean(qrDialogAccount)}
@@ -1100,9 +1369,21 @@ export function AccountsPanel({
               copies.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div
+            role="alert"
+            className="flex gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-sm text-destructive"
+          >
+            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+            <p>
+              The file holds every secret in plaintext, including the shared
+              secret and revocation code. Anyone who gets it controls the Steam
+              account. This download is logged.
+            </p>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant="destructive"
               onClick={() => void downloadExport()}
               disabled={downloadingExport}
             >
