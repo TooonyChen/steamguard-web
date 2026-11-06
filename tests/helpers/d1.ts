@@ -8,9 +8,9 @@ import type { Bindings, D1Database, D1PreparedStatement, D1Result } from '../../
 // statements sequentially (not atomically), which is fine for tests.
 export function createTestDb(): D1Database {
   const db = new DatabaseSync(':memory:')
-  // D1 does not enforce foreign keys (the app relies on this, e.g. audit rows
-  // survive viewer hard-deletes); node:sqlite enables them by default.
-  db.exec('PRAGMA foreign_keys = OFF')
+  // D1 enforces foreign keys by default; keep the shim strict so tests catch
+  // constraint failures that would otherwise only show up in production.
+  db.exec('PRAGMA foreign_keys = ON')
   const migrationsDir = join(process.cwd(), 'migrations')
   for (const file of readdirSync(migrationsDir).sort()) {
     if (file.endsWith('.sql')) db.exec(readFileSync(join(migrationsDir, file), 'utf8'))

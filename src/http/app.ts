@@ -437,8 +437,8 @@ export function createApp() {
     if (target.role !== 'viewer') forbidden('Only viewer users can be deleted from this endpoint')
     // Hard delete: fully remove the viewer and all rows that reference it. Use
     // /disable for soft delete (status='disabled', re-enableable). audit_events
-    // keep their original actor_user_id (D1 does not enforce FKs) so the deleted
-    // viewer's history stays intact.
+    // keep their original actor_user_id so the deleted viewer's history stays
+    // intact; that column has no FK (migration 0003) because D1 enforces FKs.
     await c.env.DB.batch([
       c.env.DB.prepare('DELETE FROM account_permissions WHERE user_id = ?').bind(target.id),
       c.env.DB.prepare('DELETE FROM account_key_grants WHERE user_id = ?').bind(target.id),

@@ -224,6 +224,36 @@ describe('RBAC and account grants', () => {
     expect(Number(event?.count)).toBe(1)
   })
 
+  it('hard-deletes a viewer that has logged in and keeps their audit history', async () => {
+    const env = createTestEnv()
+    await seedUser(env, 'admin1', 'admin')
+    const viewerRow = await seedUser(env, 'viewer1', 'viewer')
+    const admin = await login(env, 'admin1')
+    const viewer = await login(env, 'viewer1')
+    expect(viewer.res.status).toBe(200)
+    const accountId = await importAccount(env, admin.cookie)
+    const grant = await app.request(`/api/accounts/${accountId}/permissions`, authed(admin.cookie, {
+      method: 'POST',
+      body: JSON.stringify({ userId: viewerRow.id }),
+    }), env)
+    expect(grant.status).toBe(200)
+    expect((await app.request(`/api/accounts/${accountId}/code`, authed(viewer.cookie), env)).status).toBe(200)
+
+    const res = await app.request(`/api/admin/users/${viewerRow.id}`, authed(admin.cookie, { method: 'DELETE' }), env)
+    expect(res.status).toBe(200)
+
+    const user = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(viewerRow.id).first()
+    expect(user).toBeNull()
+    // Audit rows written by the viewer survive the delete.
+    const history = await env.DB
+      .prepare('SELECT COUNT(*) AS count FROM audit_events WHERE actor_user_id = ?')
+      .bind(viewerRow.id)
+      .first<{ count: number }>()
+    expect(Number(history?.count)).toBeGreaterThan(0)
+    // The old session no longer works.
+    expect((await app.request('/api/accounts', authed(viewer.cookie), env)).status).toBe(401)
+  })
+
   it('blocks disabling your own account (last-admin safety)', async () => {
     const env = createTestEnv()
     const adminRow = await seedUser(env, 'admin1', 'admin')
@@ -294,14 +324,15 @@ describe('retention cleanup', () => {
     const now = Date.now()
     const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString()
     const day = 24 * 3600_000
+    const user = await seedUser(env, 'cleanup-user', 'viewer')
 
     await env.DB.batch([
       env.DB.prepare('INSERT INTO sessions (id, user_id, session_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind('sess_expired', 'user_x', 'h1', iso(-1 * day), iso(-8 * day)),
+        .bind('sess_expired', user.id, 'h1', iso(-1 * day), iso(-8 * day)),
       env.DB.prepare('INSERT INTO sessions (id, user_id, session_hash, expires_at, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind('sess_revoked_old', 'user_x', 'h2', iso(40 * day), iso(-40 * day), iso(-35 * day)),
+        .bind('sess_revoked_old', user.id, 'h2', iso(40 * day), iso(-40 * day), iso(-35 * day)),
       env.DB.prepare('INSERT INTO sessions (id, user_id, session_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind('sess_valid', 'user_x', 'h3', iso(5 * day), iso(0)),
+        .bind('sess_valid', user.id, 'h3', iso(5 * day), iso(0)),
       env.DB.prepare('INSERT INTO auth_flows (id, kind, status, state_json, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .bind('flow_old', 'k', 'pending', '{}', iso(-2 * day), iso(-2 * day), iso(-2 * day)),
       env.DB.prepare('INSERT INTO auth_flows (id, kind, status, state_json, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
