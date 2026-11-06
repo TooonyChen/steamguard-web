@@ -12,9 +12,11 @@ export enum EResult {
   AlreadyRedeemed = 28,
   DuplicateRequest = 29,
   AccountLogonDenied = 63,
+  InvalidLoginAuthCode = 65,
   AccountLoginDeniedNeedTwoFactor = 85,
   TwoFactorCodeMismatch = 88,
   RateLimitExceeded = 84,
+  AccountLoginDeniedThrottle = 87,
   TimeNotSynced = 93,
 }
 

@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import forge from 'node-forge'
 import { createApp } from '../src/http/app'
+import { CAuthentication_GetPasswordRSAPublicKey_Response } from '../src/generated/steam-protobuf'
 import { createUser } from '../src/db/queries'
 import { hashPassword, encryptJson, encryptJsonLegacyV1, decryptJson, encryptedPayloadVersion } from '../src/crypto/webcrypto'
 import { createEncryptedFlow, loadEncryptedFlow } from '../src/flows/flow-store'
@@ -303,6 +305,59 @@ describe('encrypted payload versioning (PBKDF2 -> HKDF migration)', () => {
       .first<{ wrapped_account_key: string; wrap_scheme: string }>()
     expect(encryptedPayloadVersion(upgraded!.wrapped_account_key)).toBe(2)
     expect(upgraded!.wrap_scheme).toBe('app-secret/aes-256-gcm:v2')
+  })
+})
+
+describe('Steam credential sign-in errors', () => {
+  // Steam answers a wrong password with HTTP 200 + x-eresult 5 and no body.
+  function stubSteamLogin(beginEresult: number) {
+    const keys = forge.pki.rsa.generateKeyPair({ bits: 512, e: 0x10001 })
+    const rsaBody = CAuthentication_GetPasswordRSAPublicKey_Response.encode(
+      CAuthentication_GetPasswordRSAPublicKey_Response.create({
+        publickeyMod: keys.publicKey.n.toString(16),
+        publickeyExp: keys.publicKey.e.toString(16),
+        timestamp: 1,
+      }),
+    ).finish()
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.pathname.endsWith('/GetPasswordRSAPublicKey/v1')) {
+        return new Response(Buffer.from(rsaBody), { status: 200, headers: { 'x-eresult': '1' } })
+      }
+      if (url.pathname.endsWith('/BeginAuthSessionViaCredentials/v1')) {
+        return new Response(new Uint8Array(), { status: 200, headers: { 'x-eresult': String(beginEresult) } })
+      }
+      throw new Error(`unexpected Steam call ${url.pathname}`)
+    })
+  }
+
+  it.each([
+    { eresult: 5, status: 400, code: 'steam_login_rejected', message: /rejected the password/ },
+    { eresult: 84, status: 429, code: 'steam_rate_limited', message: /too many tries/ },
+    { eresult: 87, status: 429, code: 'steam_rate_limited', message: /too many tries/ },
+    { eresult: 2, status: 502, code: 'steam_login_failed', message: /Fail/ },
+  ])('maps EResult $eresult on sign-in to HTTP $status', async ({ eresult, status, code, message }) => {
+    const env = createTestEnv()
+    await seedUser(env, 'admin1', 'admin')
+    const admin = await login(env, 'admin1')
+    const accountId = await importAccount(env, admin.cookie)
+
+    const offline = globalThis.fetch
+    vi.stubGlobal('fetch', stubSteamLogin(eresult))
+    try {
+      for (const path of [`/api/accounts/${accountId}/steam-login/begin`, '/api/authenticator/setup/begin']) {
+        const res = await app.request(path, authed(admin.cookie, {
+          method: 'POST',
+          body: JSON.stringify({ accountName: 'testaccount', password: 'wrong-password' }),
+        }), env)
+        expect(res.status, path).toBe(status)
+        const body = await res.json() as { ok: false; error: { code: string; message: string } }
+        expect(body.error.code, path).toBe(code)
+        expect(body.error.message, path).toMatch(message)
+      }
+    } finally {
+      vi.stubGlobal('fetch', offline)
+    }
   })
 })
 

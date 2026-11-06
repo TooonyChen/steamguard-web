@@ -12,7 +12,7 @@ import { createEncryptedAccount, decryptAccountSecret, grantAccountToUser, revok
 import { fillMissingAvatars } from '../db/avatars'
 import { loadAccountKeyForUser } from '../vault/vault'
 import { hashPassword, nowIso, verifyPassword } from '../crypto/webcrypto'
-import { jsonError, badRequest, forbidden, notFound, conflict } from './errors'
+import { jsonError, badRequest, forbidden, notFound, conflict, HttpError } from './errors'
 import { assertAccountAccess, assertAdmin } from '../rbac/rbac'
 import { parseMaFile, serializeFullMaFile } from '../steam/mafile'
 import { publicAccount } from '../steam/account'
@@ -38,7 +38,7 @@ import { ensureMobileAccessToken } from '../steam/session-tokens'
 import { steamLoginStatus } from '../steam/login-status'
 import { steamAvatarUrl } from '../steam/profile'
 import { SteamApiError } from '../steam/webapi-transport'
-import { EResult } from '../steam/eresult'
+import { EResult, eresultName } from '../steam/eresult'
 
 const loginSchema = z.object({
   username: z.string().min(1),
@@ -210,6 +210,33 @@ function translateSteamSessionError(err: unknown): never {
     badRequest('This account has no Steam login session. Log in to Steam once to enable confirmations and login approvals.', 'steam_login_required')
   }
   throw err
+}
+
+// Steam rejecting a credential sign-in (wrong password, bad Guard code, too
+// many attempts) is a user-facing outcome, not a server bug. Map it to a
+// 4xx/502 with a readable message instead of the generic 500.
+function translateSteamCredentialError(err: unknown): never {
+  if (err instanceof SteamApiError) {
+    switch (err.result) {
+      case EResult.InvalidPassword:
+        throw new HttpError(400, 'Steam rejected the password. Check it and try again.', 'steam_login_rejected')
+      case EResult.TwoFactorCodeMismatch:
+      case EResult.InvalidLoginAuthCode:
+        throw new HttpError(400, 'Steam rejected the Steam Guard code. Check it and try again.', 'steam_login_rejected')
+      case EResult.Expired:
+        throw new HttpError(400, 'This Steam sign-in attempt expired. Start again.', 'steam_login_rejected')
+      case EResult.RateLimitExceeded:
+      case EResult.AccountLoginDeniedThrottle:
+        throw new HttpError(429, 'Steam is blocking sign-in attempts after too many tries. Wait a while and try again.', 'steam_rate_limited')
+      default:
+        throw new HttpError(502, `Steam rejected the sign-in (${eresultName(err.result)}).`, 'steam_login_failed')
+    }
+  }
+  throw err
+}
+
+function withSteamCredentialErrors<T>(run: () => Promise<T>): Promise<T> {
+  return run().catch(translateSteamCredentialError)
 }
 
 type AccountSteamLoginFlowState = CredentialFlowState & {
@@ -669,13 +696,16 @@ export function createApp() {
     const accountKey = await loadAccountKeyForUser(c.env, actor, accountId)
     const account = await decryptAccountSecret(c.env, accountId, accountKey)
     if (!account.account_name) badRequest('This account has no Steam account name to log in with')
-    const credential = await beginCredentialLogin({
-      accountName: account.account_name,
-      password: input.password,
-      deviceName: input.deviceName,
+    const accountName = account.account_name
+    const { state, autoSubmittedGuardCode } = await withSteamCredentialErrors(async () => {
+      const credential = await beginCredentialLogin({
+        accountName,
+        password: input.password,
+        deviceName: input.deviceName,
+      })
+      const initialState: AccountSteamLoginFlowState = { ...credential, accountId }
+      return submitStoredDeviceCodeIfAllowed(initialState, account.shared_secret)
     })
-    const initialState: AccountSteamLoginFlowState = { ...credential, accountId }
-    const { state, autoSubmittedGuardCode } = await submitStoredDeviceCodeIfAllowed(initialState, account.shared_secret)
     const flow = await createEncryptedFlow(c.env, {
       kind: 'account_steam_login',
       actor,
@@ -700,7 +730,7 @@ export function createApp() {
     const input = await parseJson(c, guardCodeSchema)
     const { row, state } = await loadEncryptedFlow<AccountSteamLoginFlowState>(c.env, flowId, actor, 'account_steam_login')
     assertFlowAccount(row.account_id, accountId)
-    const next = await submitCredentialGuardCode(state, input) as AccountSteamLoginFlowState
+    const next = await withSteamCredentialErrors(() => submitCredentialGuardCode(state, input)) as AccountSteamLoginFlowState
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
     return c.json(jsonOk({ flowId, step: next.step }))
   })
@@ -712,7 +742,7 @@ export function createApp() {
     const flowId = requiredParam(c, 'flowId')
     const { row, state } = await loadEncryptedFlow<AccountSteamLoginFlowState>(c.env, flowId, actor, 'account_steam_login')
     assertFlowAccount(row.account_id, accountId)
-    const next = await pollCredentialTokens(state) as AccountSteamLoginFlowState
+    const next = await withSteamCredentialErrors(() => pollCredentialTokens(state)) as AccountSteamLoginFlowState
     if (next.step !== 'tokens_ready') {
       await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
       return c.json(jsonOk({ flowId, step: next.step }))
@@ -797,7 +827,7 @@ export function createApp() {
     const actor = c.get('user')
     assertAdmin(actor)
     const input = await parseJson(c, credentialFlowSchema)
-    const credential = await beginCredentialLogin(input)
+    const credential = await withSteamCredentialErrors(() => beginCredentialLogin(input))
     const state = newSetupFlowState(credential)
     const flow = await createEncryptedFlow(c.env, {
       kind: 'authenticator_setup',
@@ -819,7 +849,7 @@ export function createApp() {
     const flowId = requiredParam(c, 'flowId')
     const input = await parseJson(c, guardCodeSchema)
     const { state } = await loadEncryptedFlow<SetupFlowState>(c.env, flowId, actor, 'authenticator_setup')
-    const next = await submitCredentialGuardCode(state, input) as SetupFlowState
+    const next = await withSteamCredentialErrors(() => submitCredentialGuardCode(state, input)) as SetupFlowState
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
     return c.json(jsonOk({ flowId, step: next.step }))
   })
@@ -829,7 +859,7 @@ export function createApp() {
     assertAdmin(actor)
     const flowId = requiredParam(c, 'flowId')
     const { state } = await loadEncryptedFlow<SetupFlowState>(c.env, flowId, actor, 'authenticator_setup')
-    const credential = await pollCredentialTokens(state)
+    const credential = await withSteamCredentialErrors(() => pollCredentialTokens(state))
     let next = { ...state, ...credential } as SetupFlowState
     if (credential.step === 'tokens_ready') next = await addAuthenticatorForSetup(next)
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, next.provisionalAccount ? 'await_activation' : 'pending')
@@ -870,7 +900,7 @@ export function createApp() {
     const actor = c.get('user')
     assertAdmin(actor)
     const input = await parseJson(c, credentialFlowSchema)
-    const credential = await beginCredentialLogin(input)
+    const credential = await withSteamCredentialErrors(() => beginCredentialLogin(input))
     const state = newTransferFlowState(credential)
     const flow = await createEncryptedFlow(c.env, {
       kind: 'authenticator_transfer',
@@ -892,7 +922,7 @@ export function createApp() {
     const flowId = requiredParam(c, 'flowId')
     const input = await parseJson(c, guardCodeSchema)
     const { state } = await loadEncryptedFlow<TransferFlowState>(c.env, flowId, actor, 'authenticator_transfer')
-    const next = await submitCredentialGuardCode(state, input) as TransferFlowState
+    const next = await withSteamCredentialErrors(() => submitCredentialGuardCode(state, input)) as TransferFlowState
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
     return c.json(jsonOk({ flowId, step: next.step }))
   })
@@ -902,7 +932,7 @@ export function createApp() {
     assertAdmin(actor)
     const flowId = requiredParam(c, 'flowId')
     const { state } = await loadEncryptedFlow<TransferFlowState>(c.env, flowId, actor, 'authenticator_transfer')
-    const credential = await pollCredentialTokens(state)
+    const credential = await withSteamCredentialErrors(() => pollCredentialTokens(state))
     let next = { ...state, ...credential } as TransferFlowState
     if (credential.step === 'tokens_ready') next = await startTransferAuthenticator(next)
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, credential.step === 'tokens_ready' ? 'await_sms' : 'pending')

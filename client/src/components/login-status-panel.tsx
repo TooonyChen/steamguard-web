@@ -10,7 +10,7 @@ import {
   ShieldAlertIcon,
 } from "lucide-react"
 
-import { api } from "@/api"
+import { api, ApiError } from "@/api"
 import { cn } from "@/lib/utils"
 import { PageHeader } from "@/components/page-header"
 import { needsSignin, type SigninStatuses } from "@/hooks/use-signin-statuses"
@@ -33,7 +33,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -92,6 +92,29 @@ function StatusLabel({ state }: { state: SteamLoginState | undefined }) {
       />
       {stateLabels[state]}
     </span>
+  )
+}
+
+type LoginError = { title: string; description: string }
+
+/** Steam turning the sign-in down (wrong password, bad code, throttled) vs. anything else. */
+function loginError(err: unknown, fallback: string): LoginError {
+  const rejected =
+    err instanceof ApiError &&
+    (err.code === "steam_login_rejected" || err.code === "steam_rate_limited" || err.code === "steam_login_failed")
+  return {
+    title: rejected ? stateLabels.invalid : "Steam sign-in failed",
+    description: err instanceof Error ? err.message : fallback,
+  }
+}
+
+function LoginErrorAlert({ error }: { error: LoginError }) {
+  return (
+    <Alert variant="destructive">
+      <ShieldAlertIcon />
+      <AlertTitle>{error.title}</AlertTitle>
+      <AlertDescription>{error.description}</AlertDescription>
+    </Alert>
   )
 }
 
@@ -401,7 +424,7 @@ function SteamLoginDialog({
   const [guardCode, setGuardCode] = useState("")
   const [flow, setFlow] = useState<SteamLoginFlow | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<LoginError | null>(null)
 
   function reset() {
     setPassword("")
@@ -444,7 +467,7 @@ function SteamLoginDialog({
         allowedConfirmations: data.allowedConfirmations,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Steam login failed")
+      setError(loginError(err, "Steam login failed"))
     } finally {
       setBusy(false)
     }
@@ -462,7 +485,7 @@ function SteamLoginDialog({
       setGuardCode("")
       setFlow({ ...flow, phase: "poll", step: data.step })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Steam Guard code was rejected")
+      setError(loginError(err, "Steam Guard code was rejected"))
     } finally {
       setBusy(false)
     }
@@ -489,7 +512,7 @@ function SteamLoginDialog({
         setFlow({ ...activeFlow, phase: "poll", step: data.step })
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Steam login poll failed")
+      setError(loginError(err, "Steam login poll failed"))
     } finally {
       setBusy(false)
     }
@@ -558,7 +581,7 @@ function SteamLoginDialog({
                 <FieldDescription>Shown in Steam session records.</FieldDescription>
               </Field>
             </FieldGroup>
-            {error ? <FieldError>{error}</FieldError> : null}
+            {error ? <LoginErrorAlert error={error} /> : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => {
                 reset()
@@ -596,7 +619,7 @@ function SteamLoginDialog({
                   <FieldLabel>Steam Guard code</FieldLabel>
                   <Input value={guardCode} onChange={(event) => setGuardCode(event.target.value)} />
                 </Field>
-                {error ? <FieldError>{error}</FieldError> : null}
+                {error ? <LoginErrorAlert error={error} /> : null}
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => reset()} disabled={busy}>
                     Restart
@@ -618,7 +641,7 @@ function SteamLoginDialog({
                       : flow.step}
                   </p>
                 </div>
-                {error ? <FieldError>{error}</FieldError> : null}
+                {error ? <LoginErrorAlert error={error} /> : null}
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => reset()} disabled={busy}>
                     Restart
