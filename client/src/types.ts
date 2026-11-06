@@ -13,6 +13,8 @@ export type Account = {
   id: string
   accountName: string
   steamId: string | null
+  /** Steam profile picture, or null until the Worker has looked it up. */
+  avatarUrl?: string | null
   status: string
   createdAt?: string
   updatedAt?: string

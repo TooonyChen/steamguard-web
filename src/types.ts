@@ -75,6 +75,8 @@ export interface SteamAccountRow {
   account_name: string
   steam_id: string | null
   status: string
+  avatar_hash: string | null
+  avatar_checked_at: string | null
   created_by: string | null
   created_at: string
   updated_at: string
