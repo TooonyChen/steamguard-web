@@ -13,6 +13,8 @@ import {
 } from "lucide-react"
 
 import { api } from "@/api"
+import { cn } from "@/lib/utils"
+import { PageHeader } from "@/components/page-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -259,15 +261,16 @@ export function AdminUsersPanel({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-medium">Users</h2>
-          <p className="text-sm text-muted-foreground">
+    <div className="flex flex-col gap-5 md:gap-6">
+      <PageHeader
+        title="Users"
+        description={
+          <>
             {users.length} app account{users.length === 1 ? "" : "s"} · {adminCount} active admin
             {adminCount === 1 ? "" : "s"}
-          </p>
-        </div>
+          </>
+        }
+        actions={
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <Button type="button" onClick={() => setAddOpen(true)}>
             <UserPlusIcon />
@@ -318,7 +321,8 @@ export function AdminUsersPanel({
             </form>
           </DialogContent>
         </Dialog>
-      </div>
+        }
+      />
 
       {message ? (
         <Alert variant={message.kind === "error" ? "destructive" : "default"}>
@@ -341,15 +345,19 @@ export function AdminUsersPanel({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <CardTitle className="flex flex-wrap items-center gap-2">
-                      <span>{user.username}</span>
-                      <Badge variant={user.role === "admin" ? "default" : "secondary"}>
-                        {user.role}
-                      </Badge>
-                      <Badge variant={isActive ? "default" : "secondary"}>
-                        {user.status}
-                      </Badge>
+                      <span className={cn(!isActive && "text-muted-foreground")}>{user.username}</span>
+                      <span className="rounded-full bg-secondary px-2 text-xs leading-[18px] font-normal text-muted-foreground">
+                        {user.role === "admin" ? "Admin" : "Viewer"}
+                      </span>
+                      {!isActive ? (
+                        <span className="rounded-full bg-secondary px-2 text-xs leading-[18px] font-normal text-muted-foreground">
+                          Disabled
+                        </span>
+                      ) : null}
                       {user.mustChangePassword ? (
-                        <Badge variant="outline">must change password</Badge>
+                        <span className="rounded-full bg-warning/12 px-2 text-xs leading-[18px] font-normal text-warning">
+                          Password change pending
+                        </span>
                       ) : null}
                     </CardTitle>
                     {user.displayName ? (
@@ -370,7 +378,7 @@ export function AdminUsersPanel({
                       </Button>
                     ) : null}
                     {isSelf ? (
-                      <Badge variant="outline">you</Badge>
+                      <span className="text-xs text-subtle">You</span>
                     ) : (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>

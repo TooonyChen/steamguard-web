@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Clock3Icon, SmartphoneIcon } from "lucide-react"
 
 import { api } from "@/api"
+import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -114,7 +115,12 @@ export function SteamFlowsPanel({ onComplete }: { onComplete: () => Promise<void
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+    <>
+    <PageHeader
+      title="Steam setup"
+      description="Add a new authenticator, or move one from another phone, through a guided Steam flow."
+    />
+    <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
       <Card>
         <CardHeader>
           <CardTitle>Authenticator flow</CardTitle>
@@ -189,17 +195,18 @@ export function SteamFlowsPanel({ onComplete }: { onComplete: () => Promise<void
         </CardHeader>
         <CardContent>
           {flow ? (
-            <pre className="max-h-96 overflow-auto rounded-lg bg-foreground p-4 text-xs text-background">
+            <pre className="max-h-96 overflow-auto rounded-xl bg-background p-4 font-mono text-xs leading-relaxed text-muted-foreground">
               {JSON.stringify(flow.result || flow, null, 2)}
             </pre>
           ) : (
-            <div className="grid min-h-64 place-items-center rounded-lg border bg-muted/30 text-sm text-muted-foreground">
+            <div className="grid min-h-64 place-items-center rounded-xl bg-background text-sm text-subtle">
               Waiting for a flow.
             </div>
           )}
         </CardContent>
       </Card>
     </div>
+    </>
   )
 }
 

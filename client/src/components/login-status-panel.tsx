@@ -1,26 +1,22 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   Clock3Icon,
   InfoIcon,
-  KeyRoundIcon,
   LogInIcon,
+  MoreHorizontalIcon,
   RefreshCwIcon,
   ShieldAlertIcon,
 } from "lucide-react"
 
 import { api } from "@/api"
+import { cn } from "@/lib/utils"
+import { PageHeader } from "@/components/page-header"
+import { needsSignin, type SigninStatuses } from "@/hooks/use-signin-statuses"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -29,6 +25,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -54,54 +58,154 @@ type SteamLoginFlow = {
   }>
 }
 
-function stateBadge(state: SteamLoginState) {
-  if (state === "active") return { label: "Active", variant: "default" as const, icon: CheckCircle2Icon }
-  if (state === "invalid") return { label: "Invalid", variant: "destructive" as const, icon: ShieldAlertIcon }
-  if (state === "missing") return { label: "Missing", variant: "secondary" as const, icon: KeyRoundIcon }
-  return { label: "Needs check", variant: "outline" as const, icon: Clock3Icon }
+const stateLabels: Record<SteamLoginState, string> = {
+  active: "Signed in",
+  refreshable: "Renews on next use",
+  missing: "Not signed in",
+  invalid: "Sign-in rejected",
 }
 
-function formatDate(value: string | null) {
-  if (!value) return "Unavailable"
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value))
+function StatusLabel({ state }: { state: SteamLoginState | undefined }) {
+  if (!state) return <span className="text-subtle">Loading</span>
+  if (state === "missing" || state === "invalid") {
+    const Icon = state === "missing" ? AlertTriangleIcon : ShieldAlertIcon
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5",
+          state === "missing" ? "text-warning" : "text-destructive",
+        )}
+      >
+        <Icon className="size-3.5" strokeWidth={2.2} />
+        {stateLabels[state]}
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        aria-hidden
+        className={cn(
+          "size-2 rounded-full",
+          state === "active" ? "bg-guard" : "border-2 border-guard",
+        )}
+      />
+      {stateLabels[state]}
+    </span>
+  )
+}
+
+function formatDay(value: string) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value))
+}
+
+/** "Today, 09:00", "Yesterday, 22:14", or a plain date for anything older. */
+function formatWhen(value: string | null) {
+  if (!value) return "Never"
+  const date = new Date(value)
+  const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(date)
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const dayMs = 24 * 60 * 60 * 1000
+  if (date.getTime() >= startOfToday.getTime()) return `Today, ${time}`
+  if (date.getTime() >= startOfToday.getTime() - dayMs) return `Yesterday, ${time}`
+  return formatDay(value)
+}
+
+function refreshTokenText(status: SteamLoginStatus | undefined) {
+  if (!status) return "…"
+  if (!status.hasRefreshToken) return "None stored"
+  return status.refreshTokenExpiresAt
+    ? `Valid until ${formatDay(status.refreshTokenExpiresAt)}`
+    : "Stored"
+}
+
+function accessTokenText(status: SteamLoginStatus | undefined) {
+  if (!status?.hasAccessToken) return "Access token: none stored"
+  if (!status.accessTokenExpiresAt) return "Access token: stored"
+  const expires = new Date(status.accessTokenExpiresAt)
+  const when = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(expires)
+  return expires.getTime() > Date.now()
+    ? `Access token: valid until ${when}`
+    : `Access token: expired ${when}`
+}
+
+function RowActions({
+  account,
+  status,
+  busy,
+  onCheck,
+  onSignin,
+}: {
+  account: Account
+  status: SteamLoginStatus | undefined
+  busy: boolean
+  onCheck: () => void
+  onSignin: () => void
+}) {
+  const missing = needsSignin(status?.state)
+  return (
+    <div className="flex items-center justify-end gap-1">
+      {missing ? (
+        <Button type="button" size="sm" disabled={busy} onClick={onSignin} className="max-md:h-10 max-md:flex-1">
+          <LogInIcon />
+          Sign in
+        </Button>
+      ) : (
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onCheck} className="max-md:h-10 max-md:flex-1">
+          <RefreshCwIcon className={cn(busy && "animate-spin")} />
+          Check
+        </Button>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground max-md:size-10"
+            aria-label={`More for ${account.accountName}`}
+          >
+            <MoreHorizontalIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-72 p-1.5">
+          <DropdownMenuLabel className="flex flex-col gap-1 py-1.5 text-xs font-normal text-muted-foreground">
+            <span>{accessTokenText(status)}</span>
+            <span>Auto-refresh: {status?.autoRefreshAvailable ? "on" : "off"}</span>
+            {status?.message ? <span>Steam: {status.message}</span> : null}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {missing ? (
+            <DropdownMenuItem className="h-9" disabled={busy} onSelect={onCheck}>
+              <RefreshCwIcon />
+              Check with Steam
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem className="h-9" disabled={busy} onSelect={onSignin}>
+              <LogInIcon />
+              Sign in again
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
 }
 
 export function LoginStatusPanel({
   accounts,
+  signins,
   onRefresh,
 }: {
   accounts: Account[]
+  signins: SigninStatuses
   onRefresh: () => Promise<void>
 }) {
-  const [statuses, setStatuses] = useState<Record<string, SteamLoginStatus>>({})
-  const [loading, setLoading] = useState(false)
+  const { statuses, setStatus, reload, loading, error } = signins
   const [busyAccountId, setBusyAccountId] = useState<string | null>(null)
   const [message, setMessage] = useState<{ kind: "success" | "error"; title: string; description?: string } | null>(null)
   const [loginAccount, setLoginAccount] = useState<Account | null>(null)
-  const accountKey = useMemo(() => accounts.map((account) => account.id).join("|"), [accounts])
-
-  async function loadStatuses() {
-    setLoading(true)
-    setMessage(null)
-    try {
-      const entries = await Promise.all(accounts.map(async (account) => {
-        const data = await api<{ steamLogin: SteamLoginStatus }>(`/api/accounts/${account.id}/steam-login/status`)
-        return [account.id, data.steamLogin] as const
-      }))
-      setStatuses(Object.fromEntries(entries))
-    } catch (err) {
-      setMessage({
-        kind: "error",
-        title: "Failed to load Steam login status",
-        description: err instanceof Error ? err.message : "Status request failed",
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
 
   async function checkAccount(account: Account) {
     setBusyAccountId(account.id)
@@ -111,16 +215,16 @@ export function LoginStatusPanel({
         method: "POST",
         body: JSON.stringify({}),
       })
-      setStatuses((current) => ({ ...current, [account.id]: data.steamLogin }))
+      setStatus(account.id, data.steamLogin)
       setMessage({
         kind: data.steamLogin.state === "invalid" ? "error" : "success",
-        title: `${account.accountName}: ${stateBadge(data.steamLogin.state).label}`,
+        title: `${account.accountName}: ${stateLabels[data.steamLogin.state]}`,
         description: data.steamLogin.message,
       })
     } catch (err) {
       setMessage({
         kind: "error",
-        title: "Steam login check failed",
+        title: "Steam sign-in check failed",
         description: err instanceof Error ? err.message : "Check request failed",
       })
     } finally {
@@ -128,119 +232,152 @@ export function LoginStatusPanel({
     }
   }
 
-  function updateStatus(accountId: string, status: SteamLoginStatus) {
-    setStatuses((current) => ({ ...current, [accountId]: status }))
-  }
-
-  useEffect(() => {
-    void loadStatuses()
-    // accountKey intentionally collapses account identity changes into one stable dependency.
-  }, [accountKey])
+  const shownMessage =
+    message ?? (error ? { kind: "error" as const, title: "Failed to load Steam sign-in status", description: error } : null)
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-medium">Login status</h2>
-          <p className="text-sm text-muted-foreground">
-            Steam mobile sessions for confirmations and login approvals.
-          </p>
-        </div>
-        <Button type="button" variant="outline" onClick={() => void loadStatuses()} disabled={loading}>
-          <RefreshCwIcon />
-          {loading ? "Checking" : "Refresh"}
-        </Button>
+    <div className="flex flex-col gap-5 md:gap-6">
+      <PageHeader
+        title="Sign-ins"
+        description="Steam mobile sessions used for confirmations and login approvals."
+        actions={
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void reload()}
+            disabled={loading}
+            aria-label="Refresh sign-in status"
+            className="max-md:size-10 max-md:p-0"
+          >
+            <RefreshCwIcon className={cn(loading && "animate-spin")} />
+            <span className="hidden md:inline">{loading ? "Loading" : "Refresh"}</span>
+          </Button>
+        }
+      />
+
+      <div className="flex items-start gap-3 rounded-xl bg-card/60 px-4 py-3 text-[13px] text-muted-foreground">
+        <InfoIcon className="mt-0.5 size-4 shrink-0" />
+        <p>
+          Access tokens expire within a day, and that is expected: with a refresh token stored, the
+          app renews them before each Steam action. Sign in again only when Steam rejects the
+          refresh token.
+        </p>
       </div>
 
-      {message ? (
-        <Alert variant={message.kind === "error" ? "destructive" : "default"}>
-          {message.kind === "error" ? <AlertTriangleIcon /> : <CheckCircle2Icon />}
-          <AlertTitle>{message.title}</AlertTitle>
-          {message.description ? <AlertDescription>{message.description}</AlertDescription> : null}
+      {shownMessage ? (
+        <Alert variant={shownMessage.kind === "error" ? "destructive" : "default"}>
+          {shownMessage.kind === "error" ? <AlertTriangleIcon /> : <CheckCircle2Icon />}
+          <AlertTitle>{shownMessage.title}</AlertTitle>
+          {shownMessage.description ? <AlertDescription>{shownMessage.description}</AlertDescription> : null}
         </Alert>
       ) : null}
 
-      <Alert>
-        <InfoIcon />
-        <AlertTitle>Access tokens are short-lived</AlertTitle>
-        <AlertDescription>
-          The displayed access-token expiry is not the full login lifetime. When a refresh token is stored, this app renews access tokens automatically before Steam actions. Re-login is only needed if Steam rejects or revokes the refresh token.
-        </AlertDescription>
-      </Alert>
+      {accounts.length === 0 ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            No accounts yet.
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          {/* Desktop: table */}
+          <div className="hidden overflow-x-auto rounded-[14px] border bg-card md:block">
+            <table className="w-full min-w-[720px] border-collapse text-sm">
+              <thead>
+                <tr className="text-left text-xs text-subtle">
+                  <th scope="col" className="px-5 pt-3.5 pb-2.5 font-medium">Account</th>
+                  <th scope="col" className="px-3 pt-3.5 pb-2.5 font-medium">Status</th>
+                  <th scope="col" className="px-3 pt-3.5 pb-2.5 font-medium">Refresh token</th>
+                  <th scope="col" className="px-3 pt-3.5 pb-2.5 font-medium">Last checked</th>
+                  <th scope="col" className="px-5 pt-3.5 pb-2.5 font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map((account) => {
+                  const status = statuses[account.id]
+                  return (
+                    <tr
+                      key={account.id}
+                      className={cn("border-t", needsSignin(status?.state) && "bg-warning/4")}
+                    >
+                      <td className="px-5 py-3.5">
+                        <div className="font-medium">{account.accountName}</div>
+                        <div className="font-mono text-xs text-subtle">
+                          {account.steamId || "Steam ID unknown"}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3.5" title={status?.message}>
+                        <StatusLabel state={status?.state} />
+                      </td>
+                      <td className="px-3 py-3.5 text-muted-foreground">{refreshTokenText(status)}</td>
+                      <td className="px-3 py-3.5 text-muted-foreground">
+                        {status ? formatWhen(status.checkedAt) : "…"}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <RowActions
+                          account={account}
+                          status={status}
+                          busy={busyAccountId !== null}
+                          onCheck={() => void checkAccount(account)}
+                          onSignin={() => setLoginAccount(account)}
+                        />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
 
-      <div className="grid gap-3">
-        {accounts.map((account) => {
-          const status = statuses[account.id]
-          const badge = stateBadge(status?.state || "missing")
-          const Icon = badge.icon
-          return (
-            <Card key={account.id} className="bg-card/95">
-              <CardHeader>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <CardTitle className="truncate">{account.accountName}</CardTitle>
-                    <CardDescription>{account.steamId || "Steam ID unavailable"}</CardDescription>
+          {/* Phone: cards */}
+          <div className="flex flex-col gap-2.5 md:hidden">
+            {accounts.map((account) => {
+              const status = statuses[account.id]
+              return (
+                <section key={account.id} className="flex flex-col gap-3 rounded-2xl bg-card p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium">{account.accountName}</div>
+                      <div className="truncate font-mono text-xs text-subtle">
+                        {account.steamId || "Steam ID unknown"}
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-sm">
+                      <StatusLabel state={status?.state} />
+                    </span>
                   </div>
-                  <Badge variant={badge.variant}>
-                    <Icon className="size-3" />
-                    {badge.label}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                <div className="grid gap-2 text-sm">
-                  <p className="text-muted-foreground">
-                    {status?.message || "Status not loaded yet."}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="outline">access {status?.hasAccessToken ? "stored" : "none"}</Badge>
-                    <Badge variant="outline">refresh {status?.hasRefreshToken ? "stored" : "none"}</Badge>
-                    <Badge variant={status?.autoRefreshAvailable ? "default" : "outline"}>
-                      auto-refresh {status?.autoRefreshAvailable ? "on" : "off"}
-                    </Badge>
-                    <Badge variant="outline">access until {formatDate(status?.accessTokenExpiresAt || null)}</Badge>
-                    <Badge variant="outline">refresh until {formatDate(status?.refreshTokenExpiresAt || null)}</Badge>
-                    {status?.checkedAt ? <Badge variant="outline">checked {formatDate(status.checkedAt)}</Badge> : null}
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2 md:justify-end">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={busyAccountId !== null}
-                    onClick={() => void checkAccount(account)}
-                  >
-                    <RefreshCwIcon />
-                    Check
-                  </Button>
-                  <Button
-                    type="button"
-                    disabled={busyAccountId !== null}
-                    onClick={() => setLoginAccount(account)}
-                  >
-                    <LogInIcon />
-                    Log in
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )
-        })}
-        {accounts.length === 0 ? (
-          <Card>
-            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              No accounts visible.
-            </CardContent>
-          </Card>
-        ) : null}
-      </div>
+                  <dl className="grid grid-cols-2 gap-2 text-[13px]">
+                    <div>
+                      <dt className="text-subtle">Refresh token</dt>
+                      <dd className="text-muted-foreground">{refreshTokenText(status)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-subtle">Last checked</dt>
+                      <dd className="text-muted-foreground">{status ? formatWhen(status.checkedAt) : "…"}</dd>
+                    </div>
+                  </dl>
+                  <RowActions
+                    account={account}
+                    status={status}
+                    busy={busyAccountId !== null}
+                    onCheck={() => void checkAccount(account)}
+                    onSignin={() => setLoginAccount(account)}
+                  />
+                </section>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       <SteamLoginDialog
         account={loginAccount}
         onOpenChange={(open) => {
           if (!open) setLoginAccount(null)
         }}
-        onStatus={(accountId, status) => updateStatus(accountId, status)}
+        onStatus={setStatus}
         onDone={onRefresh}
       />
     </div>
