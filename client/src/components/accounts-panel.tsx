@@ -12,6 +12,7 @@ import {
   RefreshCwIcon,
   SearchIcon,
   ShieldIcon,
+  Trash2Icon,
   UploadIcon,
   XIcon,
 } from "lucide-react";
@@ -188,7 +189,7 @@ function AccountAvatar({ account }: { account: Account }) {
   );
 }
 
-type AccountAction = "qr" | "logins" | "confirmations" | "export";
+type AccountAction = "qr" | "logins" | "confirmations" | "export" | "delete";
 
 /** The row's "More" menu: a dropdown on desktop, a bottom sheet on phones. */
 function AccountActionsMenu({
@@ -243,6 +244,14 @@ function AccountActionsMenu({
               >
                 <DownloadIcon />
                 Export full .maFile
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                variant="destructive"
+                className="h-9"
+                onSelect={() => onAction("delete")}
+              >
+                <Trash2Icon />
+                Delete account
               </DropdownMenuItem>
             </>
           ) : null}
@@ -316,6 +325,16 @@ function AccountActionsMenu({
               </span>
             </button>
           ) : null}
+          {role === "admin" ? (
+            <button
+              type="button"
+              onClick={() => pick("delete")}
+              className="flex min-h-14 items-center gap-3.5 rounded-2xl bg-secondary px-4 text-left text-[15px] font-medium text-destructive"
+            >
+              <Trash2Icon className="size-5 shrink-0" />
+              Delete account
+            </button>
+          ) : null}
           <Button
             type="button"
             variant="secondary"
@@ -351,6 +370,7 @@ export function AccountsPanel({
   const [message, setMessage] = useState<MessageState | null>(null);
   const [qrChallenges, setQrChallenges] = useState<Record<string, string>>({});
   const [exportAccount, setExportAccount] = useState<Account | null>(null);
+  const [deleteAccount, setDeleteAccount] = useState<Account | null>(null);
   const [confirmationsPanel, setConfirmationsPanel] =
     useState<ConfirmationsPanelState | null>(null);
   const [loginSessionsPanel, setLoginSessionsPanel] =
@@ -678,6 +698,7 @@ export function AccountsPanel({
     if (action === "logins") void listLoginSessions(account);
     if (action === "confirmations") void listConfirmations(account);
     if (action === "export") setExportAccount(account);
+    if (action === "delete") setDeleteAccount(account);
   }
 
   return (
@@ -1414,6 +1435,110 @@ export function AccountsPanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <DeleteAccountDialog
+        account={deleteAccount}
+        onClose={() => setDeleteAccount(null)}
+        onDeleted={async (account) => {
+          setDeleteAccount(null);
+          notifySuccess("Account deleted", `${account.accountName} and its stored secrets were removed.`);
+          await onRefresh();
+        }}
+      />
     </div>
+  );
+}
+
+/**
+ * Deleting drops the stored secrets for good, so the admin must type the
+ * Steam login name first. The server checks the same name.
+ */
+function DeleteAccountDialog({
+  account,
+  onClose,
+  onDeleted,
+}: {
+  account: Account | null;
+  onClose: () => void;
+  onDeleted: (account: Account) => Promise<void>;
+}) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTyped("");
+    setError(null);
+  }, [account?.id]);
+
+  const matches =
+    Boolean(account) && typed.trim().toLowerCase() === account?.accountName.toLowerCase();
+
+  async function confirm(event: React.FormEvent) {
+    event.preventDefault();
+    if (!account || !matches) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/accounts/${account.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({ confirmAccountName: typed.trim() }),
+      });
+      await onDeleted(account);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={Boolean(account)} onOpenChange={(open) => !open && !busy && onClose()}>
+      <AlertDialogContent>
+        <form onSubmit={(event) => void confirm(event)} className="flex flex-col gap-4">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {account?.accountName}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the account and its stored secrets from SteamGuard Web for every
+              user. It does not remove the authenticator from Steam.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div
+            role="alert"
+            className="flex gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-sm text-destructive"
+          >
+            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+            <p>
+              This cannot be undone. Without a .maFile backup or the revocation code you may
+              lose access to this Steam account's Guard codes.
+            </p>
+          </div>
+          <Field>
+            <FieldLabel htmlFor="delete-account-confirm">
+              Type <span className="font-mono font-semibold">{account?.accountName}</span> to
+              confirm
+            </FieldLabel>
+            <Input
+              id="delete-account-confirm"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={typed}
+              onChange={(event) => setTyped(event.target.value)}
+              disabled={busy}
+            />
+            {error ? <FieldDescription className="text-destructive">{error}</FieldDescription> : null}
+          </Field>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button" disabled={busy}>
+              Cancel
+            </AlertDialogCancel>
+            <Button type="submit" variant="destructive" disabled={!matches || busy}>
+              {busy ? "Deleting" : "Delete account"}
+            </Button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

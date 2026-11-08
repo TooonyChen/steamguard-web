@@ -96,6 +96,10 @@ const activationCodeSchema = z.object({
   activationCode: z.string().min(1),
 })
 
+const deleteAccountSchema = z.object({
+  confirmAccountName: z.string().min(1, 'Type the Steam login name to confirm deletion'),
+})
+
 const smsCodeSchema = z.object({
   smsCode: z.string().min(1),
 })
@@ -709,13 +713,33 @@ export function createApp() {
     const actor = c.get('user')
     assertAdmin(actor)
     const accountId = requiredParam(c, 'accountId')
+    const input = await parseJson(c, deleteAccountSchema)
+    const row = await c.env.DB
+      .prepare('SELECT account_name, steam_id FROM steam_accounts WHERE id = ?')
+      .bind(accountId)
+      .first<{ account_name: string; steam_id: string }>()
+    if (!row) notFound('Account not found')
+    // Guard against deleting the wrong row: the caller must type the Steam
+    // login name. Steam login names are case-insensitive.
+    if (input.confirmAccountName.trim().toLowerCase() !== row.account_name.toLowerCase()) {
+      badRequest('The Steam login name does not match this account.', 'confirmation_mismatch')
+    }
+    // Grants are deleted rather than revoked: they reference steam_accounts
+    // (D1 enforces foreign keys) and are useless once the secret blob is gone.
+    // The audit event keeps the record of who deleted what.
     await c.env.DB.batch([
       c.env.DB.prepare('DELETE FROM account_permissions WHERE account_id = ?').bind(accountId),
-      c.env.DB.prepare('UPDATE account_key_grants SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL').bind(nowIso(), accountId),
+      c.env.DB.prepare('DELETE FROM account_key_grants WHERE account_id = ?').bind(accountId),
       c.env.DB.prepare('DELETE FROM steam_account_secrets WHERE account_id = ?').bind(accountId),
       c.env.DB.prepare('DELETE FROM steam_accounts WHERE id = ?').bind(accountId),
     ])
-    await audit(c.env, { actorUserId: actor.id, accountId, action: 'account_deleted', outcome: 'success' })
+    await audit(c.env, {
+      actorUserId: actor.id,
+      accountId,
+      action: 'account_deleted',
+      outcome: 'success',
+      metadata: { accountName: row.account_name, steamId: row.steam_id },
+    })
     return c.json(jsonOk({ deleted: true }))
   })
 
