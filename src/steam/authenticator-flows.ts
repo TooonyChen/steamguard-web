@@ -21,6 +21,9 @@ export type TransferFlowState = CredentialFlowState & {
   deviceId: string
 }
 
+// Steam answered OK but did not do what we asked. The message is safe to show.
+export class SteamFlowError extends Error {}
+
 function tokensOrThrow(state: { tokens?: SteamTokens }): SteamTokens {
   if (!state.tokens?.access_token || !state.tokens.refresh_token) {
     throw new Error('Steam credential flow has not produced tokens yet')
@@ -95,7 +98,7 @@ export async function finalizeSetupAuthenticator(state: SetupFlowState, activati
     return { state: nextState, finalized: false, wantMore: true }
   }
   if (!response.response.success) {
-    throw new Error(`Steam did not finalize authenticator; status=${response.response.status}`)
+    throw new SteamFlowError(`Steam did not finalize the authenticator (status ${response.response.status}).`)
   }
   return { state: nextState, finalized: true, wantMore: false }
 }
@@ -130,7 +133,7 @@ export async function finishTransferAuthenticator(state: TransferFlowState, smsC
     version: 2,
   }, tokens.access_token)
   if (!response.response.success || !response.response.replacementToken) {
-    throw new Error('Steam did not return replacement authenticator token')
+    throw new SteamFlowError('Steam did not return a replacement authenticator.')
   }
   const replacement = response.response.replacementToken
   return {

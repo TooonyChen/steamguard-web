@@ -1,12 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import forge from 'node-forge'
 import { createApp } from '../src/http/app'
-import { CAuthentication_GetPasswordRSAPublicKey_Response } from '../src/generated/steam-protobuf'
+import {
+  CAuthentication_BeginAuthSessionViaCredentials_Response,
+  CAuthentication_GetPasswordRSAPublicKey_Response,
+  CAuthentication_PollAuthSessionStatus_Response,
+  EAuthSessionGuardType,
+} from '../src/generated/steam-protobuf'
 import { createUser } from '../src/db/queries'
 import { hashPassword, encryptJson, encryptJsonLegacyV1, decryptJson, encryptedPayloadVersion } from '../src/crypto/webcrypto'
 import { createEncryptedFlow, loadEncryptedFlow } from '../src/flows/flow-store'
 import { runCleanup } from '../src/maintenance/cleanup'
 import { toAuthUser } from '../src/db/queries'
+import { steamLong } from '../src/steam/long'
 import { createTestEnv } from './helpers/d1'
 import type { Bindings, UserRow } from '../src/types'
 
@@ -355,6 +361,148 @@ describe('Steam credential sign-in errors', () => {
         expect(body.error.code, path).toBe(code)
         expect(body.error.message, path).toMatch(message)
       }
+    } finally {
+      vi.stubGlobal('fetch', offline)
+    }
+  })
+})
+
+describe('maFile import', () => {
+  it('imports a Steam Desktop Authenticator maFile uploaded as a file', async () => {
+    const env = createTestEnv()
+    await seedUser(env, 'admin1', 'admin')
+    const admin = await login(env, 'admin1')
+    const sda = {
+      shared_secret: Buffer.alloc(20, 7).toString('base64'),
+      identity_secret: Buffer.alloc(20, 9).toString('base64'),
+      account_name: 'sdaaccount',
+      revocation_code: 'R12345',
+      server_time: 1739734563,
+      status: 1,
+      fully_enrolled: true,
+      Session: { SteamID: '76561198990485637', AccessToken: 'access', RefreshToken: 'refresh' },
+    }
+    const body = new FormData()
+    body.append('maFile', new File([JSON.stringify(sda)], '76561198990485637.maFile'))
+    const res = await app.request('/api/accounts/import-mafile', { method: 'POST', headers: { cookie: admin.cookie }, body }, env)
+    expect(res.status).toBe(201)
+    const json = await res.json() as { data: { account: { steamId: string; accountName: string } } }
+    expect(json.data.account).toMatchObject({ steamId: '76561198990485637', accountName: 'sdaaccount' })
+  })
+
+  it('rejects a bad maFile with 400 and records why in the audit log', async () => {
+    const env = createTestEnv()
+    await seedUser(env, 'admin1', 'admin')
+    const admin = await login(env, 'admin1')
+    const body = new FormData()
+    body.append('maFile', new File(['encrypted-gibberish'], 'x.maFile'))
+    const res = await app.request('/api/accounts/import-mafile', { method: 'POST', headers: { cookie: admin.cookie }, body }, env)
+    expect(res.status).toBe(400)
+    const json = await res.json() as { error: { code: string; message: string } }
+    expect(json.error.code).toBe('invalid_mafile')
+    expect(json.error.message).toMatch(/not valid JSON/)
+    const event = await env.DB
+      .prepare("SELECT outcome, metadata_json FROM audit_events WHERE action = 'account_mafile_import_failed'")
+      .first<{ outcome: string; metadata_json: string }>()
+    expect(event?.outcome).toBe('failure')
+    expect(JSON.parse(event!.metadata_json)).toMatchObject({ status: 400, code: 'invalid_mafile' })
+  })
+})
+
+describe('authenticator setup flow', () => {
+  function steamResponse(body: Uint8Array, eresult: number) {
+    return new Response(Buffer.from(body), { status: 200, headers: { 'x-eresult': String(eresult) } })
+  }
+
+  function fakeJwt(sub: string) {
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    return `${part({ alg: 'none' })}.${part({ sub, exp: 9999999999, iat: 1, iss: 'steam', aud: ['mobile'], jti: 'x' })}.sig`
+  }
+
+  it('refuses setup when the account already has a mobile authenticator', async () => {
+    const env = createTestEnv()
+    await seedUser(env, 'admin1', 'admin')
+    const admin = await login(env, 'admin1')
+    const keys = forge.pki.rsa.generateKeyPair({ bits: 512, e: 0x10001 })
+    const rsaBody = CAuthentication_GetPasswordRSAPublicKey_Response.encode({
+      publickeyMod: keys.publicKey.n.toString(16),
+      publickeyExp: keys.publicKey.e.toString(16),
+      timestamp: 1,
+    }).finish()
+    const beginBody = CAuthentication_BeginAuthSessionViaCredentials_Response.encode({
+      clientId: 1,
+      requestId: new Uint8Array([1, 2, 3]),
+      steamid: steamLong('76561198990485637'),
+      allowedConfirmations: [{ confirmationType: EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode }],
+    }).finish()
+    const offline = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.pathname.endsWith('/GetPasswordRSAPublicKey/v1')) return steamResponse(rsaBody, 1)
+      if (url.pathname.endsWith('/BeginAuthSessionViaCredentials/v1')) return steamResponse(beginBody, 1)
+      throw new Error(`unexpected Steam call ${url.pathname}`)
+    }))
+    try {
+      const res = await app.request('/api/authenticator/setup/begin', authed(admin.cookie, {
+        method: 'POST',
+        body: JSON.stringify({ accountName: 'example', password: 'pw' }),
+      }), env)
+      expect(res.status).toBe(409)
+      const json = await res.json() as { error: { code: string } }
+      expect(json.error.code).toBe('authenticator_present')
+      const event = await env.DB
+        .prepare("SELECT metadata_json FROM audit_events WHERE action = 'authenticator_setup_failed'")
+        .first<{ metadata_json: string }>()
+      expect(JSON.parse(event!.metadata_json)).toMatchObject({ code: 'authenticator_present' })
+    } finally {
+      vi.stubGlobal('fetch', offline)
+    }
+  })
+
+  it('keeps the one-time Steam tokens when AddAuthenticator fails, so poll can be retried', async () => {
+    const env = createTestEnv()
+    const adminRow = await seedUser(env, 'admin1', 'admin')
+    const admin = await login(env, 'admin1')
+    const flow = await createEncryptedFlow(env, {
+      kind: 'authenticator_setup',
+      actor: toAuthUser(adminRow),
+      state: {
+        kind: 'setup',
+        step: 'poll_tokens',
+        accountName: 'example',
+        clientId: '1',
+        steamId: '76561198990485637',
+        requestId: Buffer.from([1, 2, 3]).toString('base64'),
+        interval: 2,
+        allowedConfirmations: [],
+        deviceId: 'android:00000000-0000-0000-0000-000000000000',
+      },
+    })
+    const pollBody = CAuthentication_PollAuthSessionStatus_Response.encode({
+      accessToken: fakeJwt('76561198990485637'),
+      refreshToken: fakeJwt('76561198990485637'),
+    }).finish()
+    const calls: string[] = []
+    const offline = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      calls.push(url.pathname.split('/')[2])
+      if (url.pathname.endsWith('/PollAuthSessionStatus/v1')) return steamResponse(pollBody, 1)
+      if (url.pathname.endsWith('/AddAuthenticator/v1')) return steamResponse(new Uint8Array(), 29)
+      throw new Error(`unexpected Steam call ${url.pathname}`)
+    }))
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const res = await app.request(`/api/authenticator/setup/${flow.id}/poll`, authed(admin.cookie, { method: 'POST', body: '{}' }), env)
+        expect(res.status).toBe(409)
+        const json = await res.json() as { error: { code: string; message: string } }
+        expect(json.error.code).toBe('authenticator_present')
+        expect(json.error.message).toMatch(/Import its maFile/)
+      }
+      // Steam was polled once; the retry reused the saved tokens.
+      expect(calls).toEqual(['PollAuthSessionStatus', 'AddAuthenticator', 'AddAuthenticator'])
+      const saved = await loadEncryptedFlow<{ tokens?: { access_token: string } }>(env, flow.id, toAuthUser(adminRow), 'authenticator_setup')
+      expect(saved.state.tokens?.access_token).toBeTruthy()
     } finally {
       vi.stubGlobal('fetch', offline)
     }

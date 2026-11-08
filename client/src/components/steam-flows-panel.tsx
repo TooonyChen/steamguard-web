@@ -27,10 +27,22 @@ export function SteamFlowsPanel({ onComplete }: { onComplete: () => Promise<void
   const [smsCode, setSmsCode] = useState("")
   const [flow, setFlow] = useState<FlowState | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  async function begin(event: React.FormEvent) {
-    event.preventDefault()
+  // Every step talks to Steam and can fail; show why instead of dropping it.
+  async function run(action: () => Promise<void>) {
     setMessage(null)
+    setBusy(true)
+    try {
+      await action()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function begin() {
     const data = await api<{
       flowId: string
       step: string
@@ -128,7 +140,12 @@ export function SteamFlowsPanel({ onComplete }: { onComplete: () => Promise<void
         </CardHeader>
         <CardContent>
           {!flow ? (
-            <form onSubmit={(event) => void begin(event)} className="flex flex-col gap-4">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                void run(begin)
+              }}
+              className="flex flex-col gap-4">
               <FieldGroup>
                 <Field>
                   <FieldLabel>Flow type</FieldLabel>
@@ -155,7 +172,7 @@ export function SteamFlowsPanel({ onComplete }: { onComplete: () => Promise<void
                   />
                 </Field>
               </FieldGroup>
-              <Button type="submit" disabled={!accountName || !password}>
+              <Button type="submit" disabled={busy || !accountName || !password}>
                 <SmartphoneIcon />
                 Begin
               </Button>
@@ -174,10 +191,11 @@ export function SteamFlowsPanel({ onComplete }: { onComplete: () => Promise<void
                 onGuardCodeChange={setGuardCode}
                 onActivationCodeChange={setActivationCode}
                 onSmsCodeChange={setSmsCode}
-                onSubmitCode={() => void submitCode()}
-                onPoll={() => void poll()}
-                onCompleteSetup={() => void completeSetup()}
-                onSubmitSms={() => void submitSms()}
+                busy={busy}
+                onSubmitCode={() => void run(submitCode)}
+                onPoll={() => void run(poll)}
+                onCompleteSetup={() => void run(completeSetup)}
+                onSubmitSms={() => void run(submitSms)}
               />
               <Button type="button" variant="outline" onClick={resetFlow}>
                 Start another flow
@@ -252,6 +270,7 @@ function CurrentFlowStep({
   guardCode,
   activationCode,
   smsCode,
+  busy,
   onConfirmationTypeChange,
   onGuardCodeChange,
   onActivationCodeChange,
@@ -266,6 +285,7 @@ function CurrentFlowStep({
   guardCode: string
   activationCode: string
   smsCode: string
+  busy: boolean
   onConfirmationTypeChange: (value: string) => void
   onGuardCodeChange: (value: string) => void
   onActivationCodeChange: (value: string) => void
@@ -297,7 +317,7 @@ function CurrentFlowStep({
           <FieldLabel>Steam Guard code</FieldLabel>
           <Input value={guardCode} onChange={(event) => onGuardCodeChange(event.target.value)} />
         </Field>
-        <Button type="button" disabled={!guardCode} onClick={onSubmitCode}>
+        <Button type="button" disabled={busy || !guardCode} onClick={onSubmitCode}>
           Submit code
         </Button>
       </div>
@@ -311,7 +331,7 @@ function CurrentFlowStep({
           <p className="font-medium">Waiting for Steam tokens</p>
           <p className="mt-1 text-sm text-muted-foreground">{flow.step}</p>
         </div>
-        <Button type="button" onClick={onPoll}>
+        <Button type="button" disabled={busy} onClick={onPoll}>
           <Clock3Icon />
           Poll Steam
         </Button>
@@ -332,7 +352,7 @@ function CurrentFlowStep({
           <Input value={activationCode} onChange={(event) => onActivationCodeChange(event.target.value)} />
           <FieldDescription>{flow.phoneNumberHint || "Steam activation challenge"}</FieldDescription>
         </Field>
-        <Button type="button" disabled={!activationCode} onClick={onCompleteSetup}>
+        <Button type="button" disabled={busy || !activationCode} onClick={onCompleteSetup}>
           Complete setup
         </Button>
       </div>
@@ -346,7 +366,7 @@ function CurrentFlowStep({
           <FieldLabel>SMS code</FieldLabel>
           <Input value={smsCode} onChange={(event) => onSmsCodeChange(event.target.value)} />
         </Field>
-        <Button type="button" disabled={!smsCode} onClick={onSubmitSms}>
+        <Button type="button" disabled={busy || !smsCode} onClick={onSubmitSms}>
           Finish transfer
         </Button>
       </div>

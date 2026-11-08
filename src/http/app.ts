@@ -14,7 +14,7 @@ import { loadAccountKeyForUser } from '../vault/vault'
 import { hashPassword, nowIso, verifyPassword } from '../crypto/webcrypto'
 import { jsonError, badRequest, forbidden, notFound, conflict, HttpError } from './errors'
 import { assertAccountAccess, assertAdmin } from '../rbac/rbac'
-import { parseMaFile, serializeFullMaFile } from '../steam/mafile'
+import { MaFileError, parseMaFile, serializeFullMaFile } from '../steam/mafile'
 import { publicAccount } from '../steam/account'
 import { generateSteamGuardCode, secondsRemaining } from '../steam/guard-code'
 import { getSteamServerTime } from '../steam/time'
@@ -27,6 +27,7 @@ import {
   newSetupFlowState,
   newTransferFlowState,
   startTransferAuthenticator,
+  SteamFlowError,
   type SetupFlowState,
   type TransferFlowState,
 } from '../steam/authenticator-flows'
@@ -237,6 +238,62 @@ function translateSteamCredentialError(err: unknown): never {
 
 function withSteamCredentialErrors<T>(run: () => Promise<T>): Promise<T> {
   return run().catch(translateSteamCredentialError)
+}
+
+const AUTHENTICATOR_PRESENT_MESSAGE = 'This Steam account already has a mobile authenticator. Import its maFile on the Codes page, or use "Transfer authenticator" to move it here.'
+
+// Errors from the add/transfer authenticator steps, mapped like upstream
+// steamguard's AccountLinkError / FinalizeLinkError / TransferError.
+function translateAuthenticatorError(err: unknown): never {
+  if (err instanceof SteamApiError) {
+    switch (err.result) {
+      case EResult.DuplicateRequest:
+        throw new HttpError(409, AUTHENTICATOR_PRESENT_MESSAGE, 'authenticator_present')
+      case EResult.NoVerifiedPhone:
+        throw new HttpError(400, 'Steam needs a verified phone number on this account first. Add one at https://store.steampowered.com/phone/add and try again.', 'steam_phone_required')
+      case EResult.TwoFactorActivationCodeMismatch:
+      case EResult.SMSCodeFailed:
+        throw new HttpError(400, 'Steam rejected the code. Check the latest SMS or email code and try again.', 'steam_code_rejected')
+      case EResult.RateLimitExceeded:
+        throw new HttpError(429, 'Steam is rate limiting authenticator changes. Wait a few hours and try again.', 'steam_rate_limited')
+      case EResult.Fail:
+        throw new HttpError(502, 'Steam could not complete this step and gave no reason. Check that the account has a phone number, then try again later.', 'steam_authenticator_failed')
+      default:
+        throw new HttpError(502, `Steam rejected this step (${eresultName(err.result)}).`, 'steam_authenticator_failed')
+    }
+  }
+  if (err instanceof SteamFlowError) throw new HttpError(502, err.message, 'steam_authenticator_failed')
+  throw err
+}
+
+function withAuthenticatorErrors<T>(run: () => Promise<T>): Promise<T> {
+  return run().catch(translateAuthenticatorError)
+}
+
+// Steam only offers the Guard code / app confirmation types when the account
+// already has a mobile authenticator, so AddAuthenticator would fail later.
+function hasMobileAuthenticator(state: CredentialFlowState): boolean {
+  return state.allowedConfirmations.some((confirmation) =>
+    confirmation.confirmationType === EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode
+    || confirmation.confirmationType === EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceConfirmation)
+}
+
+// Run a user-triggered operation and, if it fails, record why in the audit
+// log. Only our own HttpError messages are stored; they never hold secrets.
+async function auditFailures<T>(
+  c: Context<AppEnv>,
+  event: { action: string; accountId?: string | null; targetType?: string | null; targetId?: string | null },
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run()
+  } catch (err) {
+    const metadata = err instanceof HttpError
+      ? { status: err.status, code: err.code, reason: err.message }
+      : { status: 500, code: 'internal_error' }
+    await audit(c.env, { actorUserId: c.get('user').id, outcome: 'failure', metadata, ...event }).catch((auditErr) => console.error(auditErr))
+    throw err
+  }
 }
 
 type AccountSteamLoginFlowState = CredentialFlowState & {
@@ -521,9 +578,17 @@ export function createApp() {
   app.post('/api/accounts/import-mafile', authMiddleware, async (c) => {
     const actor = c.get('user')
     assertAdmin(actor)
-    const maFile = await parseMaFileImport(c)
-    const account = parseMaFile(maFile)
-    const imported = await createEncryptedAccount(c.env, account, actor)
+    const imported = await auditFailures(c, { action: 'account_mafile_import_failed' }, async () => {
+      const maFile = await parseMaFileImport(c)
+      let account
+      try {
+        account = parseMaFile(maFile)
+      } catch (err) {
+        if (err instanceof MaFileError) badRequest(err.message, 'invalid_mafile')
+        throw err
+      }
+      return createEncryptedAccount(c.env, account, actor)
+    })
     await audit(c.env, { actorUserId: actor.id, accountId: imported.row.id, action: 'account_mafile_imported', outcome: 'success' })
     return c.json(jsonOk({
       account: {
@@ -827,7 +892,11 @@ export function createApp() {
     const actor = c.get('user')
     assertAdmin(actor)
     const input = await parseJson(c, credentialFlowSchema)
-    const credential = await withSteamCredentialErrors(() => beginCredentialLogin(input))
+    const credential = await auditFailures(c, { action: 'authenticator_setup_failed' }, async () => {
+      const result = await withSteamCredentialErrors(() => beginCredentialLogin(input))
+      if (hasMobileAuthenticator(result)) throw new HttpError(409, AUTHENTICATOR_PRESENT_MESSAGE, 'authenticator_present')
+      return result
+    })
     const state = newSetupFlowState(credential)
     const flow = await createEncryptedFlow(c.env, {
       kind: 'authenticator_setup',
@@ -849,7 +918,8 @@ export function createApp() {
     const flowId = requiredParam(c, 'flowId')
     const input = await parseJson(c, guardCodeSchema)
     const { state } = await loadEncryptedFlow<SetupFlowState>(c.env, flowId, actor, 'authenticator_setup')
-    const next = await withSteamCredentialErrors(() => submitCredentialGuardCode(state, input)) as SetupFlowState
+    const next = await auditFailures(c, { action: 'authenticator_setup_failed', targetType: 'auth_flow', targetId: flowId },
+      () => withSteamCredentialErrors(() => submitCredentialGuardCode(state, input))) as SetupFlowState
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
     return c.json(jsonOk({ flowId, step: next.step }))
   })
@@ -859,9 +929,19 @@ export function createApp() {
     assertAdmin(actor)
     const flowId = requiredParam(c, 'flowId')
     const { state } = await loadEncryptedFlow<SetupFlowState>(c.env, flowId, actor, 'authenticator_setup')
-    const credential = await withSteamCredentialErrors(() => pollCredentialTokens(state))
-    let next = { ...state, ...credential } as SetupFlowState
-    if (credential.step === 'tokens_ready') next = await addAuthenticatorForSetup(next)
+    const next = await auditFailures(c, { action: 'authenticator_setup_failed', targetType: 'auth_flow', targetId: flowId }, async () => {
+      let current = state
+      if (!current.tokens) {
+        const credential = await withSteamCredentialErrors(() => pollCredentialTokens(current))
+        current = { ...current, ...credential }
+        if (credential.step !== 'tokens_ready') return current
+        // Steam hands out the tokens once. Save them before the next step so
+        // a failure there can be retried instead of stranding the flow.
+        await updateEncryptedFlow(c.env, flowId, current as unknown as Record<string, unknown>, 'pending')
+      }
+      if (!current.provisionalAccount) current = await withAuthenticatorErrors(() => addAuthenticatorForSetup(current))
+      return current
+    })
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, next.provisionalAccount ? 'await_activation' : 'pending')
     return c.json(jsonOk({
       flowId,
@@ -879,7 +959,8 @@ export function createApp() {
     const flowId = requiredParam(c, 'flowId')
     const input = await parseJson(c, activationCodeSchema)
     const { state } = await loadEncryptedFlow<SetupFlowState>(c.env, flowId, actor, 'authenticator_setup')
-    const result = await finalizeSetupAuthenticator(state, input.activationCode)
+    const result = await auditFailures(c, { action: 'authenticator_setup_failed', targetType: 'auth_flow', targetId: flowId },
+      () => withAuthenticatorErrors(() => finalizeSetupAuthenticator(state, input.activationCode)))
     await updateEncryptedFlow(c.env, flowId, result.state as unknown as Record<string, unknown>, result.finalized ? 'completed' : 'await_activation')
     if (!result.finalized) return c.json(jsonOk({ flowId, step: 'await_activation', wantMore: result.wantMore }))
     if (!result.state.provisionalAccount) throw new Error('Setup flow finalized without provisional account')
@@ -900,7 +981,8 @@ export function createApp() {
     const actor = c.get('user')
     assertAdmin(actor)
     const input = await parseJson(c, credentialFlowSchema)
-    const credential = await withSteamCredentialErrors(() => beginCredentialLogin(input))
+    const credential = await auditFailures(c, { action: 'authenticator_transfer_failed' },
+      () => withSteamCredentialErrors(() => beginCredentialLogin(input)))
     const state = newTransferFlowState(credential)
     const flow = await createEncryptedFlow(c.env, {
       kind: 'authenticator_transfer',
@@ -922,7 +1004,8 @@ export function createApp() {
     const flowId = requiredParam(c, 'flowId')
     const input = await parseJson(c, guardCodeSchema)
     const { state } = await loadEncryptedFlow<TransferFlowState>(c.env, flowId, actor, 'authenticator_transfer')
-    const next = await withSteamCredentialErrors(() => submitCredentialGuardCode(state, input)) as TransferFlowState
+    const next = await auditFailures(c, { action: 'authenticator_transfer_failed', targetType: 'auth_flow', targetId: flowId },
+      () => withSteamCredentialErrors(() => submitCredentialGuardCode(state, input))) as TransferFlowState
     await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, 'pending')
     return c.json(jsonOk({ flowId, step: next.step }))
   })
@@ -932,11 +1015,20 @@ export function createApp() {
     assertAdmin(actor)
     const flowId = requiredParam(c, 'flowId')
     const { state } = await loadEncryptedFlow<TransferFlowState>(c.env, flowId, actor, 'authenticator_transfer')
-    const credential = await withSteamCredentialErrors(() => pollCredentialTokens(state))
-    let next = { ...state, ...credential } as TransferFlowState
-    if (credential.step === 'tokens_ready') next = await startTransferAuthenticator(next)
-    await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, credential.step === 'tokens_ready' ? 'await_sms' : 'pending')
-    return c.json(jsonOk({ flowId, step: credential.step === 'tokens_ready' ? 'await_sms' : next.step }))
+    const next = await auditFailures(c, { action: 'authenticator_transfer_failed', targetType: 'auth_flow', targetId: flowId }, async () => {
+      let current = state
+      if (!current.tokens) {
+        const credential = await withSteamCredentialErrors(() => pollCredentialTokens(current))
+        current = { ...current, ...credential }
+        if (credential.step !== 'tokens_ready') return current
+        // Save the one-time tokens first so a failed transfer start can be retried.
+        await updateEncryptedFlow(c.env, flowId, current as unknown as Record<string, unknown>, 'pending')
+      }
+      return withAuthenticatorErrors(() => startTransferAuthenticator(current))
+    })
+    const ready = next.step === 'tokens_ready'
+    await updateEncryptedFlow(c.env, flowId, next as unknown as Record<string, unknown>, ready ? 'await_sms' : 'pending')
+    return c.json(jsonOk({ flowId, step: ready ? 'await_sms' : next.step }))
   })
 
   app.post('/api/authenticator/transfer/:flowId/submit-sms', authMiddleware, async (c) => {
@@ -945,8 +1037,10 @@ export function createApp() {
     const flowId = requiredParam(c, 'flowId')
     const input = await parseJson(c, smsCodeSchema)
     const { state } = await loadEncryptedFlow<TransferFlowState>(c.env, flowId, actor, 'authenticator_transfer')
-    const account = await finishTransferAuthenticator(state, input.smsCode)
-    const imported = await createEncryptedAccount(c.env, account, actor)
+    const { account, imported } = await auditFailures(c, { action: 'authenticator_transfer_failed', targetType: 'auth_flow', targetId: flowId }, async () => {
+      const account = await withAuthenticatorErrors(() => finishTransferAuthenticator(state, input.smsCode))
+      return { account, imported: await createEncryptedAccount(c.env, account, actor) }
+    })
     await updateEncryptedFlow(c.env, flowId, state as unknown as Record<string, unknown>, 'completed')
     await audit(c.env, { actorUserId: actor.id, accountId: imported.row.id, action: 'authenticator_transfer_completed', outcome: 'success', targetType: 'auth_flow', targetId: flowId })
     return c.json(jsonOk({
