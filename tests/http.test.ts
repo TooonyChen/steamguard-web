@@ -409,6 +409,62 @@ describe('maFile import', () => {
   })
 })
 
+describe('Steam account deletion', () => {
+  it('requires the Steam login name, then removes the account, secrets, grants and permissions', async () => {
+    const env = createTestEnv()
+    await seedUser(env, 'admin1', 'admin')
+    const viewerRow = await seedUser(env, 'viewer1', 'viewer')
+    const admin = await login(env, 'admin1')
+    const accountId = await importAccount(env, admin.cookie, 'DeleteMe')
+    const grant = await app.request(`/api/accounts/${accountId}/permissions`, authed(admin.cookie, {
+      method: 'POST',
+      body: JSON.stringify({ userId: viewerRow.id, canViewCode: true, canViewStatus: true }),
+    }), env)
+    expect(grant.status).toBeLessThan(300)
+
+    const del = (confirmAccountName?: string) => app.request(`/api/accounts/${accountId}`, authed(admin.cookie, {
+      method: 'DELETE',
+      body: JSON.stringify(confirmAccountName === undefined ? {} : { confirmAccountName }),
+    }), env)
+
+    expect((await del()).status).toBe(400)
+    const wrong = await del('someoneelse')
+    expect(wrong.status).toBe(400)
+    expect((await wrong.json() as { error: { code: string } }).error.code).toBe('confirmation_mismatch')
+    const count = async (table: string) => (await env.DB
+      .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${table === 'steam_accounts' ? 'id' : 'account_id'} = ?`)
+      .bind(accountId).first<{ count: number }>())!.count
+    expect(await count('steam_accounts')).toBe(1)
+
+    // Case-insensitive, like Steam login names.
+    const ok = await del(' deleteme ')
+    expect(ok.status).toBe(200)
+    for (const table of ['steam_accounts', 'steam_account_secrets', 'account_key_grants', 'account_permissions']) {
+      expect(await count(table), table).toBe(0)
+    }
+    const event = await env.DB
+      .prepare("SELECT metadata_json FROM audit_events WHERE action = 'account_deleted' AND account_id = ?")
+      .bind(accountId).first<{ metadata_json: string }>()
+    expect(JSON.parse(event!.metadata_json)).toEqual({ accountName: 'DeleteMe', steamId: '76561199000000001' })
+
+    expect((await del('DeleteMe')).status).toBe(404)
+  })
+
+  it('keeps account deletion admin-only', async () => {
+    const env = createTestEnv()
+    await seedUser(env, 'admin1', 'admin')
+    await seedUser(env, 'viewer1', 'viewer')
+    const admin = await login(env, 'admin1')
+    const viewer = await login(env, 'viewer1')
+    const accountId = await importAccount(env, admin.cookie, 'keepme')
+    const res = await app.request(`/api/accounts/${accountId}`, authed(viewer.cookie, {
+      method: 'DELETE',
+      body: JSON.stringify({ confirmAccountName: 'keepme' }),
+    }), env)
+    expect(res.status).toBe(403)
+  })
+})
+
 describe('authenticator setup flow', () => {
   function steamResponse(body: Uint8Array, eresult: number) {
     return new Response(Buffer.from(body), { status: 200, headers: { 'x-eresult': String(eresult) } })

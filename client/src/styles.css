@@ -150,7 +150,7 @@
        leave overflow/position styles on <body> after close, collapsing the
        page to 0 height (white screen). Force layout to stay stable. */
     position: static !important;
-    overflow-x: hidden;
+    overflow-x: clip; /* not hidden: hidden makes <body> a scroll container and breaks the sticky sidebar */
   }
 
   html {
