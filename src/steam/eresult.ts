@@ -17,7 +17,10 @@ export enum EResult {
   TwoFactorCodeMismatch = 88,
   RateLimitExceeded = 84,
   AccountLoginDeniedThrottle = 87,
+  TwoFactorActivationCodeMismatch = 89,
   TimeNotSynced = 93,
+  SMSCodeFailed = 94,
+  NoVerifiedPhone = 123,
 }
 
 export function eresultName(value: number): string {

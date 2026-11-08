@@ -15,7 +15,7 @@ import { decodeSteamJwt, steamIdFromJwt } from '../src/steam/tokens'
 import { generateConfirmationHash } from '../src/steam/confirmation-hash'
 import { parseSteamQrChallenge } from '../src/steam/qr-login'
 import { buildLoginApprovalSignature } from '../src/steam/login-approval-signature'
-import { parseMaFile, serializeFullMaFile } from '../src/steam/mafile'
+import { MaFileError, parseMaFile, serializeFullMaFile } from '../src/steam/mafile'
 import { encryptSteamPassword } from '../src/steam/crypto/rsa-password'
 import { eresultName } from '../src/steam/eresult'
 import { hasUsableTokens } from '../src/steam/session-tokens'
@@ -200,6 +200,47 @@ describe('Vault and maFile foundation', () => {
     const exported = serializeFullMaFile(parsed)
     expect(exported).toContain('"shared_secret": "zvIayp3JPvtvX/QGHqsqKBk/44s="')
     expect(exported).toContain('"refresh_token": "refresh"')
+  })
+
+  it('parses Steam Desktop Authenticator maFiles (SteamID and tokens under Session)', () => {
+    const parsed = parseMaFile(JSON.stringify({
+      shared_secret: sharedSecret,
+      serial_number: '123',
+      revocation_code: 'R12345',
+      uri: 'otpauth://totp/Steam:example',
+      server_time: 1739734563,
+      account_name: 'example',
+      token_gid: 'gid',
+      identity_secret: 'GQP46b73Ws7gr8GmZFR0sDuau5c=',
+      secret_1: '',
+      status: 1,
+      device_id: 'android:00000000-0000-0000-0000-000000000000',
+      fully_enrolled: true,
+      Session: {
+        SteamID: '76561198990485637',
+        SessionID: 'session',
+        SteamLoginSecure: 'cookie',
+        RefreshToken: 'refresh',
+        AccessToken: 'access',
+      },
+    }))
+    expect(parsed.steam_id).toBe('76561198990485637')
+    expect(parsed.tokens).toEqual({ access_token: 'access', refresh_token: 'refresh' })
+    expect(parsed).not.toHaveProperty('Session')
+    expect(parsed).not.toHaveProperty('server_time')
+  })
+
+  it('keeps full precision for unquoted 64-bit steam_id values', () => {
+    const text = `{"account_name":"example","steam_id":76561198990485637,"shared_secret":"${sharedSecret}","identity_secret":"GQP46b73Ws7gr8GmZFR0sDuau5c="}`
+    expect(parseMaFile(text).steam_id).toBe('76561198990485637')
+  })
+
+  it('rejects unusable maFiles with a readable MaFileError', () => {
+    expect(() => parseMaFile('not json')).toThrowError(MaFileError)
+    expect(() => parseMaFile('not json')).toThrowError(/not valid JSON/)
+    expect(() => parseMaFile({ account_name: 'example', shared_secret: sharedSecret, identity_secret: 'x' }))
+      .toThrowError(/no SteamID/)
+    expect(() => parseMaFile({ account_name: 'example', steam_id: '1' })).toThrowError(/shared_secret, identity_secret/)
   })
 })
 
